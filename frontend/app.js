@@ -15,7 +15,7 @@
  */
 
 /* ── Config ─────────────────────────────────────────────── */
-const API_BASE = "http://localhost:5000";  // Flask server URL
+const API_BASE = "http://localhost:5005";  // Flask server URL (Nuclear Port Migration to 5005)
 const BROWSE_PAGE_SIZE = 20;               // Movies shown per "Load more"
 
 /* ── State ──────────────────────────────────────────────── */
@@ -23,6 +23,54 @@ let allMovies       = [];   // All movies from /movies
 let filteredMovies  = [];   // After search / genre filter
 let browseOffset    = 0;    // Pagination cursor for browse grid
 let activeGenre     = "All";
+
+// --- Poster Batching Manager ---
+const PosterBatchManager = {
+  queue: [],
+  timer: null,
+  
+  add(title, imgElement, fallbackElement) {
+    this.queue.push({ title, imgElement, fallbackElement });
+    if (!this.timer) {
+      this.timer = setTimeout(() => this.process(), 200);
+    }
+  },
+  
+  async process() {
+    const currentBatch = this.queue.splice(0, 10);
+    this.timer = null;
+    if (currentBatch.length === 0) return;
+    
+    const titles = currentBatch.map(item => item.title);
+    try {
+      const response = await fetch(`${API_BASE}/api/posters/batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ titles })
+      });
+      const data = await response.json();
+      
+      currentBatch.forEach(item => {
+        const url = data[item.title];
+        if (url && url !== "NOT_FOUND") {
+          // Use our binary proxy instead of hitting TMDB directly
+          item.imgElement.src = `${API_BASE}/api/poster/${encodeURIComponent(item.title)}`;
+        } else {
+          // Trigger error manually to show fallback
+          item.imgElement.onerror();
+        }
+      });
+    } catch (e) {
+      console.error("Batch poster error:", e);
+      currentBatch.forEach(item => item.imgElement.onerror());
+    }
+    
+    // Continue if more in queue
+    if (this.queue.length > 0) {
+      this.timer = setTimeout(() => this.process(), 100);
+    }
+  }
+};
 let lastRecommendations = [];
 
 /* ── DOM refs ─────────────────────────────────────────── */
@@ -268,13 +316,15 @@ document.addEventListener("click", e => {
    (The "Dummy User" approach)
 ═══════════════════════════════════════════════════════════ */
 async function getRecommendationsByMovie(title) {
+  const isPureAI = document.getElementById('pure-ai-toggle').checked;
+  
   if (!title || !title.trim()) {
     setStatus("Please type a movie title first.", "error");
     return;
   }
 
   setLoading(true);
-  setStatus(`AI is analyzing connections for "${title}"...`);
+  setStatus(isPureAI ? `AI is exploring the multiverse for "${title}"...` : `AI is analyzing connections for "${title}"...`);
   movieGrid.innerHTML = "";
   resultsHeader.hidden = true;
   becauseBanner.hidden = true;
@@ -283,7 +333,10 @@ async function getRecommendationsByMovie(title) {
     const res = await fetch(`${API_BASE}/recommend-by-movie`, {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ movie_title: title }),
+      body:    JSON.stringify({ 
+        movie_title: title,
+        pure_ai: isPureAI
+       }),
     });
 
     if (!res.ok) {
@@ -408,90 +461,122 @@ async function getRecommendations() {
  * @param {number} index            — for animation stagger
  */
 function createMovieCard(movie, predictedRating, index) {
+  const { id, title, genres, reason, rank } = movie;
   const card = document.createElement("article");
   card.className = "movie-card";
   card.tabIndex  = 0;
-  card.setAttribute("aria-label", movie.title);
+  card.setAttribute("aria-label", title);
 
-  // Assign a deterministic accent color per genre
-  const accentColor = genreColor(movie.genres);
-  const colorBar    = document.createElement("div");
-  colorBar.className           = "card-color-bar";
-  colorBar.style.background    = accentColor;
+  // 1. Poster Wrapper
+  const posterWrapper = document.createElement("div");
+  posterWrapper.className = "card-poster-wrapper";
 
+  // 1a. Generative Fallback
+  const fallback = document.createElement("div");
+  fallback.className = "generative-poster";
+  fallback.id = `poster-fallback-${id}-${index}`;
+
+  const genreList = genres.split("|");
+  const primaryGenre = genreList[0];
+  const genresMap = {
+    "Action": "🔥", "Adventure": "🏔️", "Animation": "🎨", "Comedy": "😂", "Crime": "🚔",
+    "Documentary": "🎥", "Drama": "🎭", "Fantasy": "🧙", "Film-Noir": "🕶️", "Horror": "🧛",
+    "Musical": "🎵", "Mystery": "🕵️", "Romance": "💘", "Sci-Fi": "👽", "Thriller": "🔪",
+    "War": "🪖", "Western": "🤠", "default": "🎬"
+  };
+  const icon = genresMap[primaryGenre] || genresMap["default"];
+  
+  const grads = [
+    "linear-gradient(135deg, #7c5cfc, #5c9dfc)",
+    "linear-gradient(135deg, #fc5ca0, #7c5cfc)",
+    "linear-gradient(135deg, #00d4b4, #7c5cfc)",
+    "linear-gradient(135deg, #ffc947, #fc5ca0)"
+  ];
+  const gradient = grads[Math.abs(hashString(title)) % grads.length];
+
+  fallback.innerHTML = `
+    <div class="gp-bg" style="background: ${gradient}"></div>
+    <div class="gp-icon">${icon}</div>
+    <div class="gp-title">${title}</div>
+  `;
+
+  // 1b. Real Image (Batched Discovery)
+  const img = document.createElement("img");
+  img.className = "poster-img";
+  img.alt = title;
+  img.loading = "lazy";
+  img.style.opacity = "0"; // Fade in on load
+  
+  img.onload = () => {
+    img.style.opacity = "1";
+    fallback.style.display = "none";
+  };
+  img.onerror = () => {
+    img.style.display = "none";
+    fallback.style.display = "flex";
+  };
+
+  // Add to batching manager instead of direct src setting
+  PosterBatchManager.add(title, img, fallback);
+
+  posterWrapper.appendChild(fallback);
+  posterWrapper.appendChild(img);
+
+  // 2. Card Body
   const body = document.createElement("div");
   body.className = "card-body";
 
-  // Rank badge (only for recommendations)
-  if (predictedRating !== null && movie.rank) {
-    const rank = document.createElement("div");
-    rank.className   = "card-rank";
-    rank.textContent = `#${movie.rank} Pick`;
-    body.appendChild(rank);
+  if (predictedRating !== null && rank) {
+    const rankBadge = document.createElement("div");
+    rankBadge.className = "card-rank";
+    rankBadge.textContent = `#${rank} Pick`;
+    body.appendChild(rankBadge);
   }
 
-  // Title
-  const title = document.createElement("h3");
-  title.className   = "card-title";
-  title.textContent = movie.title;
-  body.appendChild(title);
+  const titleEl = document.createElement("h3");
+  titleEl.className = "card-title";
+  titleEl.textContent = title;
+  body.appendChild(titleEl);
 
-  // Genre badges
   const genreWrap = document.createElement("div");
   genreWrap.className = "card-genres";
-  movie.genres.split("|").slice(0, 3).forEach(g => {
+  genreList.slice(0, 3).forEach(g => {
     if (g && g !== "(no genres listed)") {
       const badge = document.createElement("span");
-      badge.className   = "genre-badge";
+      badge.className = "genre-badge";
       badge.textContent = g;
       genreWrap.appendChild(badge);
     }
   });
   body.appendChild(genreWrap);
 
-  // Star rating (recommendations only)
   if (predictedRating !== null) {
     const ratingWrap = document.createElement("div");
     ratingWrap.className = "card-rating";
-
-    const stars = document.createElement("span");
-    stars.className   = "stars";
-    stars.textContent = starsForRating(predictedRating);
-
-    const num = document.createElement("span");
-    num.className   = "rating-num";
-    num.textContent = `${predictedRating.toFixed(1)} / 5`;
-
-    ratingWrap.appendChild(stars);
-    ratingWrap.appendChild(num);
+    ratingWrap.innerHTML = `
+      <span class="stars">${starsForRating(predictedRating)}</span>
+      <span class="rating-num">${predictedRating.toFixed(1)} / 5</span>
+    `;
     body.appendChild(ratingWrap);
   }
 
-  // Reason text (only populated for rule-based engine in cold-start mode)
-  if (movie.reason) {
-    const reasonPara = document.createElement("p");
-    reasonPara.className = "card-reason";
-    reasonPara.innerHTML = `<strong>Reason:</strong> ${movie.reason}`;
-    
-    // Quick inline styling for the reason
-    reasonPara.style.fontSize = "0.85rem";
-    reasonPara.style.color = "var(--text-dim)";
-    reasonPara.style.marginTop = "0.75rem";
-    reasonPara.style.lineHeight = "1.4";
-    reasonPara.style.fontStyle = "italic";
-
-    body.appendChild(reasonPara);
-  }
-
-  card.appendChild(colorBar);
+  card.appendChild(posterWrapper);
   card.appendChild(body);
 
-  // Open modal on click or Enter key
   const openModal = () => showModal(movie, predictedRating);
   card.addEventListener("click", openModal);
   card.addEventListener("keydown", e => { if (e.key === "Enter") openModal(); });
 
   return card;
+}
+
+function hashString(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash) + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return hash;
 }
 
 /* ═══════════════════════════════════════════════════════════
