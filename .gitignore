@@ -1,0 +1,41 @@
+# Virtual environments
+backend/venv/
+venv/
+.venv/
+env/
+.env/
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+backend/__pycache__/
+
+# Local Environment Variables
+.env
+backend/.env
+
+# AI Models & Large Assets (usually ignored due to size)
+model/*.keras
+model/*.h5
+model/*.pth
+model/*.json
+!model/README.md
+
+# Movie datasets (Raw CSVs)
+data/*.csv
+!data/README.md
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+tmp/
+*.log

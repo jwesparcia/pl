@@ -38,6 +38,7 @@ const chipList       = document.getElementById("chip-list");
 const movieSearch    = document.getElementById("movie-search");
 const loadMoreBtn    = document.getElementById("load-more-btn");
 const modalTemplate  = document.getElementById("modal-template");
+const aiBadge        = document.getElementById("ai-badge");
 let   activeModal    = null;
 
 // Mode toggle
@@ -273,7 +274,7 @@ async function getRecommendationsByMovie(title) {
   }
 
   setLoading(true);
-  setStatus(`Analyzing embedding space for "${title}"...`);
+  setStatus(`AI is analyzing connections for "${title}"...`);
   movieGrid.innerHTML = "";
   resultsHeader.hidden = true;
   becauseBanner.hidden = true;
@@ -291,12 +292,18 @@ async function getRecommendationsByMovie(title) {
     }
 
     const data = await res.json();
-    const { source_movie, recommendations } = data;
+    const { source_movie, recommendations, ai_status } = data;
     lastRecommendations = recommendations;
 
     if (!recommendations.length) {
       setStatus("No similar movies found.", "error");
       return;
+    }
+
+    // Show AI Provider badge
+    if (aiBadge) {
+      aiBadge.textContent = `Powered by ${ai_status || "Templates"}`;
+      aiBadge.hidden = false;
     }
 
     // Show "Because you liked" banner
@@ -335,7 +342,7 @@ async function getRecommendations() {
   }
 
   setLoading(true);
-  setStatus(`Finding top picks for User ${userId}...`);
+  setStatus(`AI is re-ranking top picks for User ${userId}...`);
   movieGrid.innerHTML = "";
   resultsHeader.hidden = true;
   becauseBanner.hidden = true;
@@ -352,12 +359,19 @@ async function getRecommendations() {
       throw new Error(err.description || `HTTP ${res.status}`);
     }
 
-    const recommendations = await res.json();
+    const data = await res.json();
+    const { recommendations, ai_status } = data;
     lastRecommendations = recommendations;
 
     if (!recommendations.length) {
       setStatus("⚠️  No recommendations found for this user.", "error");
       return;
+    }
+
+    // Show AI Provider badge
+    if (aiBadge) {
+      aiBadge.textContent = `Powered by ${ai_status || "Templates"}`;
+      aiBadge.hidden = false;
     }
 
     setStatus(`Top ${recommendations.length} picks for User ${userId}`);
@@ -451,6 +465,22 @@ function createMovieCard(movie, predictedRating, index) {
     ratingWrap.appendChild(stars);
     ratingWrap.appendChild(num);
     body.appendChild(ratingWrap);
+  }
+
+  // Reason text (only populated for rule-based engine in cold-start mode)
+  if (movie.reason) {
+    const reasonPara = document.createElement("p");
+    reasonPara.className = "card-reason";
+    reasonPara.innerHTML = `<strong>Reason:</strong> ${movie.reason}`;
+    
+    // Quick inline styling for the reason
+    reasonPara.style.fontSize = "0.85rem";
+    reasonPara.style.color = "var(--text-dim)";
+    reasonPara.style.marginTop = "0.75rem";
+    reasonPara.style.lineHeight = "1.4";
+    reasonPara.style.fontStyle = "italic";
+
+    body.appendChild(reasonPara);
   }
 
   card.appendChild(colorBar);

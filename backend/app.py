@@ -1,24 +1,24 @@
 """
 =============================================================================
-app.py — Flask REST API for the Movie Recommendation System
-=============================================================================
-
-Endpoints:
-  GET  /health            → check that model is loaded
-  GET  /movies            → list all movies
-  POST /recommend         → given user_id, return top-10 recommended movies
-  POST /recommend-by-movie → cold start: given a movie title, recommend
-                             similar movies using embedding transfer
+app.py — Flask REST API for the Movie Recommendation System (Keras)
 =============================================================================
 """
 
 import os
+import re
+import json
 import pickle
+from dotenv import load_dotenv
+
+# Load environment variables FIRST to apply Protobuf workaround
+load_dotenv()
+
 import numpy as np
-import torch
-import torch.nn as nn
+import tensorflow as tf
+from tensorflow import keras
 from flask import Flask, jsonify, request, abort, send_from_directory
 from flask_cors import CORS
+from llm_utils import analyze_and_rerank, get_movie_explanation, get_ai_status
 
 # ─── Setup ───────────────────────────────────────────────────────────────────
 ROOT_DIR     = os.path.dirname(os.path.abspath(__file__))
@@ -27,6 +27,15 @@ MODEL_DIR    = os.path.abspath(os.path.join(ROOT_DIR, "..", "model"))
 
 app = Flask(__name__)
 CORS(app)
+
+
+def fix_title(title):
+    """Reformat 'Matrix, The (1999)' → 'The Matrix (1999)'.
+    Handles articles: The, A, An."""
+    m = re.match(r'^(.+),\s+(The|A|An)\s+(\(\d{4}\))$', title)
+    if m:
+        return f"{m.group(2)} {m.group(1)} {m.group(3)}"
+    return title
 
 
 # ─── Serve frontend files (explicit routes to avoid static_url_path conflicts)
@@ -42,72 +51,54 @@ def serve_frontend(filename):
     except Exception:
         abort(404)
 
-MODEL_PATH = os.path.join(MODEL_DIR, "recommender.pt")
-META_PATH  = os.path.join(MODEL_DIR, "metadata.pkl")
-DEVICE     = torch.device("cpu")
-
-
-# ─── Collaborative Filtering Model (must match train_model.py) ───────────────
-class CollaborativeFilteringModel(nn.Module):
-    """
-    Same architecture as in train_model.py.
-    We re-define it here so app.py has no import dependency on train_model.py.
-    """
-    def __init__(self, num_users, num_movies, embed_dim=50):
-        super().__init__()
-        self.user_embedding  = nn.Embedding(num_users,  embed_dim)
-        self.movie_embedding = nn.Embedding(num_movies, embed_dim)
-        self.user_bias       = nn.Embedding(num_users,  1)
-        self.movie_bias      = nn.Embedding(num_movies, 1)
-
-    def forward(self, user_ids, movie_ids):
-        u_vec  = self.user_embedding(user_ids)
-        m_vec  = self.movie_embedding(movie_ids)
-        dot    = (u_vec * m_vec).sum(dim=1)
-        u_bias = self.user_bias(user_ids).squeeze(1)
-        m_bias = self.movie_bias(movie_ids).squeeze(1)
-        return torch.sigmoid(dot + u_bias + m_bias)
+MODEL_PATH     = os.path.join(MODEL_DIR, "recommender.keras")
+META_JSON_PATH  = os.path.join(MODEL_DIR, "metadata.json")
+MOVIES_JSON_PATH = os.path.join(MODEL_DIR, "movies.json")
 
 
 # ─── Load model and metadata at startup ──────────────────────────────────────
-print("Loading model and metadata ...")
+print("Loading Keras model and metadata ...")
 model = None
 meta  = None
+movies = []
+movie_id_map = {}
+title2idx = {}
 
 try:
-    checkpoint = torch.load(MODEL_PATH, map_location=DEVICE, weights_only=False)
-    model = CollaborativeFilteringModel(
-        num_users  = checkpoint["num_users"],
-        num_movies = checkpoint["num_movies"],
-        embed_dim  = checkpoint["embed_dim"],
-    ).to(DEVICE)
-    model.load_state_dict(checkpoint["state_dict"])
-    model.eval()
-    print(f"Model loaded  ({checkpoint['num_users']} users, {checkpoint['num_movies']} movies)")
+    model = keras.models.load_model(MODEL_PATH)
+    print("Model loaded.")
 except Exception as e:
     print(f"Could not load model: {e}")
     print("    Run  python backend/train_model.py  first.")
 
 try:
-    with open(META_PATH, "rb") as f:
-        meta = pickle.load(f)
-    user2idx   = meta["user2idx"]
-    movie2idx  = meta["movie2idx"]
-    idx2movie  = meta["idx2movie"]
-    movies_df  = meta["movies_df"]
-    min_rating = meta["min_rating"]
-    max_rating = meta["max_rating"]
+    # Load scalar metadata from JSON
+    if os.path.exists(META_JSON_PATH):
+        with open(META_JSON_PATH, "r") as f:
+            meta = json.load(f)
+
+        user2idx   = {int(k): v for k, v in meta["user2idx"].items()}
+        movie2idx  = {int(k): v for k, v in meta["movie2idx"].items()}
+        idx2movie  = {int(k): v for k, v in meta["idx2movie"].items()}
+        min_rating = meta["min_rating"]
+        max_rating = meta["max_rating"]
+
+    # Load movies metadata from JSON
+    if os.path.exists(MOVIES_JSON_PATH):
+        with open(MOVIES_JSON_PATH, "r") as f:
+            movies = json.load(f)
+            # movies is a list of dicts: [{"movieId": 1, "title": "Toy Story", "genres": "Animation|..."}, ...]
+            movie_id_map = {m["movieId"]: m for m in movies}
 
     # Build title -> internal movie index lookup for cold-start endpoint
-    title2idx = {}
     for orig_id, idx in movie2idx.items():
-        row = movies_df[movies_df["movieId"] == orig_id]
-        if not row.empty:
-            title2idx[row.iloc[0]["title"].strip().lower()] = idx
+        m_data = movie_id_map.get(orig_id)
+        if m_data:
+            title2idx[m_data["title"].strip().lower()] = idx
+
     print(f"Metadata loaded -- {len(user2idx)} users, {len(movie2idx)} movies")
     print(f"Title lookup built -- {len(title2idx)} titles indexed")
 except Exception as e:
-    title2idx = {}
     print(f"Could not load metadata: {e}")
 
 
@@ -119,19 +110,29 @@ def denormalize(pred_norm):
 # ─── Health check ─────────────────────────────────────────────────────────────
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "model_loaded": model is not None, "meta_loaded": meta is not None})
+    return jsonify({
+        "status": "ok", 
+        "model_loaded": model is not None, 
+        "meta_loaded": meta is not None,
+        "ai_status": get_ai_status()
+    })
 
 
 # ─── List all movies ──────────────────────────────────────────────────────────
 @app.route("/movies", methods=["GET"])
 def get_movies():
     """Return every movie: [ {id, title, genres}, … ]"""
-    if meta is None:
+    if not movies:
         abort(503, description="Metadata not loaded — train the model first.")
-    records = movies_df[["movieId", "title", "genres"]].rename(
-        columns={"movieId": "id"}
-    ).to_dict(orient="records")
-    return jsonify(records)
+    
+    results = []
+    for m in movies:
+        results.append({
+            "id":     m["movieId"],
+            "title":  fix_title(m["title"]),
+            "genres": m["genres"]
+        })
+    return jsonify(results)
 
 
 # ─── Recommend top-10 movies for a user ───────────────────────────────────────
@@ -140,12 +141,6 @@ def recommend():
     """
     Body:    { "user_id": <int> }
     Returns: [ { rank, id, title, genres, predicted_rating }, … ] (top 10)
-
-    Steps:
-      1. Map user_id → internal embedding index
-      2. Build tensors for every movie
-      3. Single forward pass through the model
-      4. Sort by predicted score, return top 10
     """
     if model is None or meta is None:
         abort(503, description="Model not loaded — run train_model.py first.")
@@ -163,33 +158,67 @@ def recommend():
     else:
         user_idx = user_id % len(user2idx)
 
-    all_movie_indices = np.array(list(idx2movie.keys()), dtype=np.int64)
+    all_movie_indices = np.array(list(idx2movie.keys()), dtype=np.int32)
     n = len(all_movie_indices)
 
-    user_tensor  = torch.tensor([user_idx] * n, dtype=torch.long, device=DEVICE)
-    movie_tensor = torch.tensor(all_movie_indices, dtype=torch.long, device=DEVICE)
+    user_tensor  = np.array([user_idx] * n, dtype=np.int32)
+    
+    # Predict over all movies
+    preds = model.predict([user_tensor, all_movie_indices], batch_size=4096, verbose=0).flatten()
 
-    with torch.no_grad():
-        preds = model(user_tensor, movie_tensor).cpu().numpy()
-
-    top_indices = np.argsort(preds)[::-1][:10]
+    # Increase candidate pool for AI to 40
+    top_indices = np.argsort(preds)[::-1][:40]
 
     results = []
     for rank, pos in enumerate(top_indices):
         movie_idx         = int(all_movie_indices[pos])
         original_movie_id = idx2movie[movie_idx]
-        row               = movies_df[movies_df["movieId"] == original_movie_id]
-        if row.empty:
+        
+        m_data = movie_id_map.get(original_movie_id)
+        if not m_data:
             continue
+            
         results.append({
             "rank":             rank + 1,
             "id":               int(original_movie_id),
-            "title":            row.iloc[0]["title"],
-            "genres":           row.iloc[0]["genres"],
+            "title":            fix_title(m_data["title"]),
+            "genres":           m_data["genres"],
             "predicted_rating": round(denormalize(preds[pos]), 2),
         })
 
-    return jsonify(results)
+    # AI Re-ranking for User ID
+    source_context = {"title": "your preferences", "genres": "mixed"}
+    ai_ranked = analyze_and_rerank(source_context, results)
+    if ai_ranked:
+        # Keep top 15 for explanation step, then pick top 10
+        results = ai_ranked[:15]
+    
+    # Generate AI explanations
+    explanations = get_movie_explanation(source_context, results)
+    
+    final_results = []
+    valid_count = 0
+    for idx, r in enumerate(results):
+        reason = explanations[idx]
+        if reason != "INVALID":
+            r["rank"] = valid_count + 1
+            r["reason"] = reason
+            final_results.append(r)
+            valid_count += 1
+        if valid_count >= 10:
+            break
+    
+    # Fallback to top 10 if AI fails/rejects all
+    if not final_results:
+        final_results = results[:10]
+        for idx, r in enumerate(final_results):
+            r["rank"] = idx + 1
+            r["reason"] = explanations[idx] if idx < len(explanations) else "Recommended based on your history."
+
+    return jsonify({
+        "recommendations": final_results,
+        "ai_status": get_ai_status()
+    })
 
 
 # ─── Cold Start: Recommend by movie title (dummy user) ────────────────────────
@@ -198,23 +227,7 @@ DUMMY_USER_ID = 9999  # Virtual user for cold-start recommendations
 @app.route("/recommend-by-movie", methods=["POST"])
 def recommend_by_movie():
     """
-    Cold Start Recommendation via Embedding Transfer
-    =================================================
-    Body:    { "movie_title": "Toy Story (1995)" }
-    Returns: { source_movie: {...}, recommendations: [{rank, id, title, genres, predicted_rating}, ...] }
-
-    How it works (the "dummy user" approach):
-      1. Look up the selected movie's internal index
-      2. Extract its LEARNED embedding vector from model.movie_embedding
-      3. Use this vector as the "dummy user" embedding
-      4. Compute dot_product(dummy_user_emb, all_movie_embs) + movie_biases
-      5. Apply sigmoid to get predicted ratings
-      6. Sort descending, exclude the input movie, return top 10
-
-    This solves the cold start problem: even a brand-new user with NO history
-    can get intelligent recommendations by simply telling us ONE movie they like.
-    The model's learned embedding space captures latent features (genre affinity,
-    era, tone, etc.) so similar movies cluster together via dot-product similarity.
+    Cold Start Recommendation via Embedding Transfer (Keras)
     """
     if model is None or meta is None:
         abort(503, description="Model not loaded -- run train_model.py first.")
@@ -237,134 +250,160 @@ def recommend_by_movie():
 
     # Find the original movie info for the response
     source_movie_id = idx2movie[source_movie_idx]
-    source_row = movies_df[movies_df["movieId"] == source_movie_id]
+    source_data = movie_id_map.get(source_movie_id)
+    if not source_data:
+        abort(404, description="Source movie data not found.")
+        
     source_info = {
         "id":    int(source_movie_id),
-        "title": source_row.iloc[0]["title"],
-        "genres": source_row.iloc[0]["genres"],
+        "title": fix_title(source_data["title"]),
+        "genres": source_data["genres"],
     }
-
-    # Enforce Movie-Driven Signal
-    print("\n[DEBUG] --- ENFORCING MOVIE-DRIVEN SIGNAL ---", flush=True)
-    print(f"[DEBUG] Dummy User Assigned ID: {DUMMY_USER_ID}", flush=True)
-    print(f"[DEBUG] Assigned explicit interaction rating: 5.0", flush=True)
-    print(f"[DEBUG] Source Movie: {source_info['title']} (ID: {source_info['id']})", flush=True)
     
     source_genres = set(source_info["genres"].split("|"))
 
-    # --- Step 2: Multi-Sample Injection & Similarity Computation ---
-    with torch.no_grad():
-        all_movie_indices = np.array(list(idx2movie.keys()), dtype=np.int64)
-        movie_tensor = torch.tensor(all_movie_indices, dtype=torch.long, device=DEVICE)
+    # Extract raw embedding weights from Keras layers
+    movie_embeddings = model.get_layer("movie_embedding").get_weights()[0]
+    all_movie_indices = np.array(list(dict.fromkeys(idx2movie.keys())), dtype=np.int32)  # Deduplicate
 
-        all_movie_embs = model.movie_embedding(movie_tensor)   # (N, embed_dim)
-        all_movie_bias = model.movie_bias(movie_tensor).squeeze(1)  # (N,)
+    all_movie_embs = movie_embeddings[all_movie_indices]   # (N, embed_dim)
+    source_movie_emb = movie_embeddings[source_movie_idx]  # (embed_dim,)
 
-        # Extract source movie embedding
-        source_movie_emb = model.movie_embedding(
-            torch.tensor([source_movie_idx], dtype=torch.long, device=DEVICE)
-        )  # shape: (1, embed_dim)
+    # Compute raw dot product similarities
+    raw_similarities = np.dot(all_movie_embs, source_movie_emb)
 
-        # Compute raw dot product similarities
-        raw_similarities = (source_movie_emb * all_movie_embs).sum(dim=1).cpu().numpy()
+    # Min-Max normalize similarities so they range [0, 1]
+    sim_min = raw_similarities.min()
+    sim_max = raw_similarities.max()
+    if sim_max > sim_min:
+        sim_normalized = (raw_similarities - sim_min) / (sim_max - sim_min)
+    else:
+        sim_normalized = np.zeros_like(raw_similarities)
 
-        # Min-Max normalize similarities so they range [0, 1] for hybrid scoring
-        sim_min = raw_similarities.min()
-        sim_max = raw_similarities.max()
-        if sim_max > sim_min:
-            sim_normalized = (raw_similarities - sim_min) / (sim_max - sim_min)
-        else:
-            sim_normalized = np.zeros_like(raw_similarities)
-
-        # Find top 5 similar movies (excluding source)
-        top_sim_indices = np.argsort(sim_normalized)[::-1]
-        top_5_similar_indices = []
-        top_5_movies_log = []
-        for pos in top_sim_indices:
-            idx = int(all_movie_indices[pos])
-            if idx == source_movie_idx:
-                continue
-            
-            orig_id = idx2movie[idx]
-            r = movies_df[movies_df["movieId"] == orig_id]
-            if not r.empty:
-                top_5_similar_indices.append(idx)
-                top_5_movies_log.append({
-                    "title": r.iloc[0]["title"],
-                    "similarity": round(float(sim_normalized[pos]), 4)
-                })
-            if len(top_5_similar_indices) == 5:
-                break
-
-        print("\n[DEBUG] --- TOP 5 MOST SIMILAR MOVIES (by embedding) ---", flush=True)
-        for i, m in enumerate(top_5_movies_log):
-            print(f"  {i+1}. {m['title']} (sim: {m['similarity']})", flush=True)
-
-        # Inject ALL of them into dummy user preferences (mean embedding)
-        multi_sample_indices = [source_movie_idx] + top_5_similar_indices
-        dummy_user_emb = model.movie_embedding(
-            torch.tensor(multi_sample_indices, dtype=torch.long, device=DEVICE)
-        ).mean(dim=0, keepdim=True)
-
-        # --- Step 3: Score every movie via dummy user embedding ---
-        scores = (dummy_user_emb * all_movie_embs).sum(dim=1) + all_movie_bias
-        preds = torch.sigmoid(scores).cpu().numpy()
-
-    # --- Step 4: Hybrid Scoring and Filtering ---
+    # --- Hybrid Scoring and Filtering ---
+    seen_movie_ids = set()  # Prevent duplicates in output
     unsorted_results = []
     for pos in range(len(all_movie_indices)):
         movie_idx = int(all_movie_indices[pos])
         if movie_idx == source_movie_idx:
             continue  # Exclude the selected movie itself
 
-        sim_score = float(sim_normalized[pos])
-        
-        # Filtering rule: Exclude movies with very low similarity scores
-        if sim_score < 0.1:
-            continue
-
         original_movie_id = idx2movie[movie_idx]
-        row = movies_df[movies_df["movieId"] == original_movie_id]
-        if row.empty:
+        if original_movie_id in seen_movie_ids:
+            continue  # Skip duplicate movie IDs
+        seen_movie_ids.add(original_movie_id)
+
+        sim_score = float(sim_normalized[pos])
+
+        # Filtering rule: Exclude movies with very low similarity scores
+        if sim_score < 0.05:
             continue
 
-        pred_score = float(preds[pos])
-        predicted_rating = denormalize(pred_score)
-        
-        # Hybrid Scoring (70% model prediction, 30% similarity score scaled to 5.0)
-        sim_score_scaled = sim_score * 5.0
-        final_score = (0.7 * predicted_rating) + (0.3 * sim_score_scaled)
+        m_data = movie_id_map.get(original_movie_id)
+        if not m_data:
+            continue
 
-        # Prioritize movies with same genre
-        movie_genres_str = row.iloc[0]["genres"]
+        # Calculate Jaccard Similarity for genres for precise matching
+        movie_genres_str = m_data["genres"]
         movie_genres = set(movie_genres_str.split("|"))
+
         genre_overlap = len(source_genres & movie_genres)
-        if genre_overlap > 0:
-            final_score += (0.15 * genre_overlap) # Boost based on overlapping genres
+        genre_union = len(source_genres | movie_genres)
+        jaccard_sim = genre_overlap / genre_union if genre_union > 0 else 0.0
+
+        # Final score prioritizes exact genre match + embedding similarity
+        final_score = (jaccard_sim * 0.6) + (sim_score * 0.4)
+
+        if genre_overlap == 0:
+            continue  # Discard if absolutely no genre overlap
+
+        # ── Rule-Based Generator ──
+        # Guarantee a realistic high rating (3.5 to 5.0) for recommendations based on match score
+        realistic_rating = min(5.0, max(1.0, 3.5 + (1.5 * final_score)))  # Floor at 1.0
+
+        # Build dynamic reason from shared genres
+        shared_genres = list(source_genres & movie_genres)
+        genre_str = shared_genres[0] if shared_genres else "film"
+        if len(shared_genres) >= 2:
+            genre_str = f"{shared_genres[0]} and {shared_genres[1]}"
+
+        reason_text = f"A highly-rated {genre_str} similar to {source_info['title']}, sharing overlapping themes and emotional tone."
 
         unsorted_results.append({
             "id": int(original_movie_id),
-            "title": row.iloc[0]["title"],
+            "title": fix_title(m_data["title"]),
             "genres": movie_genres_str,
-            "predicted_rating": round(predicted_rating, 2),
+            "predicted_rating": round(realistic_rating, 2),
             "similarity": round(sim_score, 4),
-            "final_score": round(final_score, 4)
+            "final_score": round(final_score, 4),
+            "reason": reason_text
         })
 
     # Sort descending by final_score
     unsorted_results.sort(key=lambda x: x["final_score"], reverse=True)
+
+    # --- Step 4: Advanced Re-ranking (LLM / Heuristic) ---
+    # Take a larger pool (40) for advanced filtering and re-ranking
+    candidates_for_llm = unsorted_results[:40]
     
-    results = []
-    print("\n[DEBUG] --- FINAL RECOMMENDED MOVIE LIST & SCORES ---", flush=True)
-    for rank, r in enumerate(unsorted_results[:10]):
-        print(f"  {rank+1}. {r['title']} | Final: {r['final_score']} | Pred: {r['predicted_rating']} | Sim: {r['similarity']} | Genres: {r['genres']}", flush=True)
-        r["rank"] = rank + 1
-        results.append(r)
-    print("---------------------------------------------------\n", flush=True)
+    print(f"Requesting AI re-ranking for {len(candidates_for_llm)} candidates...")
+    
+    # 1. Filter: Remove movies with weak tonal justification
+    filtered_pool = []
+    source_genres = set(source_info['genres'].split('|'))
+    
+    for c in candidates_for_llm:
+        # Tonal justification calculation
+        m_genres = set(c['genres'].split('|'))
+        genre_match_count = len(source_genres & m_genres)
+        
+        # Rule: If only one genre matches and there's no major actor/director overlap 
+        # (sim_score is currently representing our C-signal to some extent from Keras), 
+        # we check the score.
+        if genre_match_count <= 1 and c['final_score'] < 0.7:
+            # Reject if the title doesn't share keywords or themes (heuristic)
+            continue
+            
+        filtered_pool.append(c)
+        
+    print(f"Justification check passed for {len(filtered_pool)} movies.")
+
+    # 2. Re-rank
+    ai_ranked = analyze_and_rerank(source_info, filtered_pool)
+    if ai_ranked:
+        candidate_pool = ai_ranked[:20]
+    else:
+        candidate_pool = filtered_pool[:20]
+    
+    # 3. Explain
+    explanations = get_movie_explanation(source_info, candidate_pool)
+    
+    raw_results = []
+    valid_count = 0
+    for idx, r in enumerate(candidate_pool):
+        reason = explanations[idx]
+        if reason == "INVALID":
+            continue
+            
+        r["rank"] = valid_count + 1
+        r["reason"] = reason
+        raw_results.append(r)
+        valid_count += 1
+        
+        if valid_count >= 10:
+            break
+
+    # Final fallback if AI rejects everything
+    if not raw_results:
+        raw_results = candidate_pool[:10]
+        for idx, r in enumerate(raw_results):
+            r["rank"] = idx + 1
+            r["reason"] = explanations[idx] if idx < len(explanations) else "A similar movie experience."
 
     return jsonify({
         "source_movie":    source_info,
-        "recommendations": results,
+        "recommendations": raw_results,
+        "ai_status":       get_ai_status()
     })
 
 

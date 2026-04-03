@@ -1,16 +1,21 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="description" content="Movie Recommendation System powered by collaborative filtering and Keras. Get personalized movie picks instantly." />
+  <meta name="description"
+    content="Movie Recommendation System powered by collaborative filtering and Keras. Get personalized movie picks instantly." />
   <title>MovieMind — AI Movie Recommendations</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+    rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
 </head>
+
 <body>
+
 
   <!-- ═══════════════════════════════════════════════════
        HEADER / HERO
@@ -54,14 +59,9 @@
             <span class="label-icon">🍿</span> Tell us a movie you love
           </label>
           <div class="input-row autocomplete-wrapper">
-            <input
-              type="text"
-              id="movie-title-input"
-              class="text-input"
-              placeholder="e.g. Toy Story, The Matrix, Pulp Fiction..."
-              autocomplete="off"
-              aria-label="Enter a movie title"
-            />
+            <input type="text" id="movie-title-input" class="text-input"
+              placeholder="e.g. Toy Story, The Matrix, Pulp Fiction..." autocomplete="off"
+              aria-label="Enter a movie title" />
             <button id="recommend-movie-btn" class="btn-primary" aria-label="Get similar recommendations">
               <span class="btn-text">Find Similar</span>
               <span class="btn-icon">✨</span>
@@ -78,16 +78,8 @@
             <span class="label-hint">(try 1 – 610)</span>
           </label>
           <div class="input-row">
-            <input
-              type="number"
-              id="user-id-input"
-              class="text-input"
-              placeholder="e.g. 42"
-              min="1"
-              max="610"
-              value="1"
-              aria-label="Enter your user ID"
-            />
+            <input type="number" id="user-id-input" class="text-input" placeholder="e.g. 42" min="1" max="610" value="1"
+              aria-label="Enter your user ID" />
             <button id="recommend-btn" class="btn-primary" aria-label="Get movie recommendations">
               <span class="btn-text">Get Recommendations</span>
               <span class="btn-icon">✨</span>
@@ -119,7 +111,10 @@
     ════════════════════════════════════════════════════ -->
     <section class="results-section" id="results-section" aria-label="Recommended movies">
       <div class="results-header" id="results-header" hidden>
-        <h2 id="results-title">Top Picks for You</h2>
+        <div class="results-title-group">
+          <h2 id="results-title">Top Picks for You</h2>
+          <div id="ai-badge" class="ai-badge"></div>
+        </div>
         <span class="results-count" id="results-count"></span>
       </div>
       <!-- "Because you liked" banner (cold start mode) -->
@@ -136,13 +131,8 @@
     <section class="browse-section" id="browse-section">
       <div class="browse-header">
         <h2>Browse All Movies</h2>
-        <input
-          type="search"
-          id="movie-search"
-          class="search-input"
-          placeholder="🔍  Search by title or genre…"
-          aria-label="Search movies"
-        />
+        <input type="search" id="movie-search" class="search-input" placeholder="🔍  Search by title or genre…"
+          aria-label="Search movies" />
       </div>
       <div class="movie-grid" id="browse-grid"></div>
       <button class="btn-load-more" id="load-more-btn">Load more</button>
@@ -162,10 +152,10 @@
         <div class="modal-rating" id="modal-rating"></div>
         <p class="modal-explanation">
           <strong>Why this recommendation?</strong><br />
-          The recommendation was generated using AI embeddings. If you searched by User ID, 
-          the model matched your rating history to similar users via dot-product similarity. 
-          If you picked a movie, we identified its nearest neighbors in our latent vector space, 
-          formed a multi-sample preference profile, and calculated a hybrid score combining 
+          The recommendation was generated using AI embeddings. If you searched by User ID,
+          the model matched your rating history to similar users via dot-product similarity.
+          If you picked a movie, we identified its nearest neighbors in our latent vector space,
+          formed a multi-sample preference profile, and calculated a hybrid score combining
           model predictions with direct embedding similarity and genre overlap.
         </p>
       </div>
@@ -178,12 +168,13 @@
   <footer class="site-footer">
     <p>
       Built with <span class="heart">♥</span> using
-      <strong>PyTorch</strong> · <strong>Flask</strong> · <strong>Vanilla JS</strong> ·
+      <strong>TensorFlow</strong> · <strong>Flask</strong> · <strong>Vanilla JS</strong> ·
       MovieLens Dataset
     </p>
-    <p class="footer-sub">Collaborative Filtering — School ML Project</p>
+    <p class="footer-sub">AI-powered explanations by Google Gemini · Collaborative Filtering — School ML Project</p>
   </footer>
 
   <script src="app.js"></script>
 </body>
+
 </html>
