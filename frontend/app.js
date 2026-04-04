@@ -20,9 +20,8 @@ const BROWSE_PAGE_SIZE = 20;               // Movies shown per "Load more"
 
 /* ── State ──────────────────────────────────────────────── */
 let allMovies       = [];   // All movies from /movies
-let filteredMovies  = [];   // After search / genre filter
+let filteredMovies  = [];   // After search text filter
 let browseOffset    = 0;    // Pagination cursor for browse grid
-let activeGenre     = "All";
 
 // --- Poster Batching Manager ---
 const PosterBatchManager = {
@@ -82,7 +81,6 @@ const resultsHeader  = document.getElementById("results-header");
 const resultsTitle   = document.getElementById("results-title");
 const resultsCount   = document.getElementById("results-count");
 const browseGrid     = document.getElementById("browse-grid");
-const chipList       = document.getElementById("chip-list");
 const movieSearch    = document.getElementById("movie-search");
 const loadMoreBtn    = document.getElementById("load-more-btn");
 const modalTemplate  = document.getElementById("modal-template");
@@ -115,56 +113,23 @@ async function loadAllMovies() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     allMovies      = await res.json();
     filteredMovies = [...allMovies];
-    populateGenreChips();
     renderBrowseGrid(true);
+
   } catch (err) {
     console.error("Could not load movies:", err);
-    setStatus("⚠️  Could not reach the API. Is Flask running on port 5000?", "error");
+    setStatus("⚠️ Could not reach the API. Is Flask initializing or running? (Port 5005)", "error");
   }
 }
 
-/* ── Genre chips ────────────────────────────────────────── */
-function populateGenreChips() {
-  // Gather every unique genre across all movies
-  const genreSet = new Set();
-  allMovies.forEach(m => {
-    m.genres.split("|").forEach(g => {
-      if (g && g !== "(no genres listed)") genreSet.add(g);
-    });
-  });
-
-  // Sort alphabetically
-  const sorted = [...genreSet].sort();
-  sorted.forEach(genre => {
-    const btn = document.createElement("button");
-    btn.className   = "chip";
-    btn.textContent = genre;
-    btn.dataset.genre = genre;
-    btn.addEventListener("click", () => setGenreFilter(genre, btn));
-    chipList.appendChild(btn);
-  });
-}
-
-function setGenreFilter(genre, btn) {
-  // Deactivate all chips, activate selected
-  document.querySelectorAll(".chip").forEach(c => c.classList.remove("active"));
-  btn.classList.add("active");
-  activeGenre = genre;
-
-  // Re-filter
-  applyFilters();
-}
-
-/* ── Search + filter logic ──────────────────────────────── */
+/* ── Search logic ──────────────────────────────── */
 function applyFilters() {
   const query = movieSearch.value.toLowerCase().trim();
 
   filteredMovies = allMovies.filter(m => {
-    const matchesGenre = activeGenre === "All" || m.genres.includes(activeGenre);
     const matchesSearch = !query ||
       m.title.toLowerCase().includes(query) ||
       m.genres.toLowerCase().includes(query);
-    return matchesGenre && matchesSearch;
+    return matchesSearch;
   });
 
   browseOffset = 0;
@@ -335,7 +300,8 @@ async function getRecommendationsByMovie(title) {
       headers: { "Content-Type": "application/json" },
       body:    JSON.stringify({ 
         movie_title: title,
-        pure_ai: isPureAI
+        pure_ai: isPureAI,
+        use_ai: isPureAI || document.getElementById('pure-ai-toggle').checked // Correctly pass AI state
        }),
     });
 
@@ -401,10 +367,14 @@ async function getRecommendations() {
   becauseBanner.hidden = true;
 
   try {
+    const isAIEnabled = document.getElementById('pure-ai-toggle').checked;
     const res = await fetch(`${API_BASE}/recommend`, {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ user_id: userId }),
+      body:    JSON.stringify({ 
+        user_id: userId,
+        use_ai: isAIEnabled
+      }),
     });
 
     if (!res.ok) {
@@ -479,18 +449,18 @@ function createMovieCard(movie, predictedRating, index) {
   const genreList = genres.split("|");
   const primaryGenre = genreList[0];
   const genresMap = {
-    "Action": "🔥", "Adventure": "🏔️", "Animation": "🎨", "Comedy": "😂", "Crime": "🚔",
-    "Documentary": "🎥", "Drama": "🎭", "Fantasy": "🧙", "Film-Noir": "🕶️", "Horror": "🧛",
-    "Musical": "🎵", "Mystery": "🕵️", "Romance": "💘", "Sci-Fi": "👽", "Thriller": "🔪",
-    "War": "🪖", "Western": "🤠", "default": "🎬"
+    "Action": "", "Adventure": "", "Animation": "", "Comedy": "", "Crime": "",
+    "Documentary": "", "Drama": "", "Fantasy": "", "Film-Noir": "", "Horror": "",
+    "Musical": "", "Mystery": "", "Romance": "", "Sci-Fi": "", "Thriller": "",
+    "War": "", "Western": "", "default": ""
   };
   const icon = genresMap[primaryGenre] || genresMap["default"];
   
   const grads = [
-    "linear-gradient(135deg, #7c5cfc, #5c9dfc)",
-    "linear-gradient(135deg, #fc5ca0, #7c5cfc)",
-    "linear-gradient(135deg, #00d4b4, #7c5cfc)",
-    "linear-gradient(135deg, #ffc947, #fc5ca0)"
+    "#5c6e58",
+    "#4a5e4b",
+    "#8b7d6b",
+    "#c4b581"
   ];
   const gradient = grads[Math.abs(hashString(title)) % grads.length];
 
@@ -560,6 +530,13 @@ function createMovieCard(movie, predictedRating, index) {
     body.appendChild(ratingWrap);
   }
 
+  if (reason && reason !== "INVALID") {
+    const reasonEl = document.createElement("p");
+    reasonEl.className = "card-reason";
+    reasonEl.textContent = reason;
+    body.appendChild(reasonEl);
+  }
+
   card.appendChild(posterWrapper);
   card.appendChild(body);
 
@@ -609,8 +586,16 @@ function showModal(movie, predictedRating) {
   if (predictedRating !== null) {
     rating.textContent = `${starsForRating(predictedRating)}  ${predictedRating.toFixed(2)} / 5.0`;
     rating.hidden      = false;
-  } else {
     rating.hidden = true;
+  }
+
+  // 3b. Reason
+  const reasonEl = activeModal.querySelector("#modal-reason");
+  if (movie.reason && movie.reason !== "INVALID") {
+    reasonEl.textContent = movie.reason;
+    reasonEl.hidden = false;
+  } else {
+    reasonEl.hidden = true;
   }
 
   // 4. Events for this instance
@@ -659,25 +644,25 @@ function starsForRating(rating) {
  * Keeps the grid visually varied without random values (stable across renders).
  */
 const GENRE_COLORS = {
-  "Action":     "linear-gradient(90deg,#fc5c7d,#6a3093)",
-  "Adventure":  "linear-gradient(90deg,#f7971e,#ffd200)",
-  "Animation":  "linear-gradient(90deg,#43e97b,#38f9d7)",
-  "Comedy":     "linear-gradient(90deg,#ffecd2,#fcb69f)",
-  "Crime":      "linear-gradient(90deg,#4b6cb7,#182848)",
-  "Drama":      "linear-gradient(90deg,#a18cd1,#fbc2eb)",
-  "Fantasy":    "linear-gradient(90deg,#a1c4fd,#c2e9fb)",
-  "Horror":     "linear-gradient(90deg,#434343,#000000)",
-  "Romance":    "linear-gradient(90deg,#f953c6,#b91d73)",
-  "Sci-Fi":     "linear-gradient(90deg,#00c6ff,#0072ff)",
-  "Thriller":   "linear-gradient(90deg,#373b44,#4286f4)",
-  "Western":    "linear-gradient(90deg,#c94b4b,#4b134f)",
-  "Musical":    "linear-gradient(90deg,#f7ff00,#db36a4)",
-  "Documentary":"linear-gradient(90deg,#3a7bd5,#3a6073)",
+  "Action":     "#5c6e58",
+  "Adventure":  "#4a5e4b",
+  "Animation":  "#8b7d6b",
+  "Comedy":     "#c4b581",
+  "Crime":      "#3d4d3e",
+  "Drama":      "#6e6255",
+  "Fantasy":    "#a39373",
+  "Horror":     "#2c2f2a",
+  "Romance":    "#a07d83",
+  "Sci-Fi":     "#5d758f",
+  "Thriller":   "#3c4b57",
+  "Western":    "#875a46",
+  "Musical":    "#a69c6b",
+  "Documentary":"#475b6e",
 };
 
 function genreColor(genres) {
   const firstGenre = genres.split("|")[0];
-  return GENRE_COLORS[firstGenre] || "linear-gradient(90deg,#7c5cfc,#00d4b4)";
+  return GENRE_COLORS[firstGenre] || "#5c6e58";
 }
 
 /** Set the status message below search panel. */
@@ -716,13 +701,9 @@ userInput.addEventListener("keydown", e => {
 });
 
 loadMoreBtn.addEventListener("click", () => renderBrowseGrid(false));
-
 movieSearch.addEventListener("input", debounce(applyFilters, 250));
 
-// First chip ("All") is clicked by default — wire up its event
-chipList.querySelector(".chip[data-genre='All']").addEventListener("click", function () {
-  setGenreFilter("All", this);
-});
+
 
 /* Utility: debounce search input so we don't re-render on every keystroke */
 function debounce(fn, ms) {

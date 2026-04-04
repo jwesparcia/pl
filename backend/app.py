@@ -192,39 +192,29 @@ def recommend():
     if user_id is None:
         abort(400, description="Missing 'user_id'.")
 
-    # In modern AI mode, we'll pick a diverse set of top movies as candidates
-    # since we don't have the personalized neural model active.
-    # In a real app, you'd pull from user history here.
-    candidate_indices = np.random.choice(len(movies), size=min(50, len(movies)), replace=False)
-    
-    results = []
-    for idx_pos in candidate_indices:
-        m = movies[idx_pos]
-        results.append({
-            "id":     m["movieId"],
-            "title":  fix_title(m["title"]),
-            "genres": m["genres"],
-            "predicted_rating": 4.0  # Placeholder for re-ranking
-        })
-
-    # Let the AI Brain re-rank
+    # Let the AI Brain re-rank if enabled
+    use_ai = body.get("use_ai", True)
     source_context = {"title": "Trending Favorites", "genres": "Variety"}
-    ai_ranked = analyze_and_rerank(source_context, results)
     
-    if ai_ranked:
-        final_pool = ai_ranked[:10]
-    else:
-        final_pool = results[:10]
+    final_pool = results[:10]
+    if use_ai:
+        ai_ranked = analyze_and_rerank(source_context, results)
+        if ai_ranked:
+            final_pool = ai_ranked[:10]
 
-    # Explain
-    explanations = get_movie_explanation(source_context, final_pool)
-    for i, r in enumerate(final_pool):
-        r["rank"] = i + 1
-        r["reason"] = explanations[i] if i < len(explanations) else "Highly rated in our system."
+        # Explain
+        explanations = get_movie_explanation(source_context, final_pool)
+        for i, r in enumerate(final_pool):
+            r["rank"] = i + 1
+            r["reason"] = explanations[i] if i < len(explanations) else "Highly rated in our system."
+    else:
+        for i, r in enumerate(final_pool):
+            r["rank"] = i + 1
+            r["reason"] = "Based on trending library favorites."
 
     return jsonify({
         "recommendations": final_pool,
-        "ai_status": get_ai_status()
+        "ai_status": get_ai_status() if use_ai else "Standard (Local Only)"
     })
 
 
@@ -250,34 +240,37 @@ def recommend_by_movie():
         # 1. Get raw suggestions from AI
         ai_recos = get_pure_ai_reco(movie_title, n=12)
         
-        # 2. Enrich with local IDs/metadata if available
-        final_recos = []
-        for i, r in enumerate(ai_recos):
-            # Try to find local match for ID and consistent genres
-            # Quick search in movies list
-            local_match = None
-            q_norm = normalize_title(r['title'])
-            for m in movies:
-                if q_norm == normalize_title(m['title']):
-                    local_match = m
-                    break
-            
-            reco_obj = {
-                "id": int(local_match['movieId']) if local_match else f"ai-{i}",
-                "title": fix_title(local_match['title']) if local_match else r['title'],
-                "genres": local_match['genres'] if local_match else r['genres'],
-                "reason": r['reason'],
-                "predicted_rating": round(4.5 - (i * 0.1), 2),
-                "rank": i + 1
-            }
-            final_recos.append(reco_obj)
+        if not ai_recos:
+            print("--- PURE AI FAILED. FALLING BACK TO STANDARD HYBRID SEARCH ---")
+            is_pure_ai = False
+        else:
+            # 2. Enrich with local IDs/metadata if available
+            final_recos = []
+            for i, r in enumerate(ai_recos):
+                # Try to find local match for ID and consistent genres
+                local_match = None
+                q_norm = normalize_title(r['title'])
+                for m in movies:
+                    if q_norm == normalize_title(m['title']):
+                        local_match = m
+                        break
+                
+                reco_obj = {
+                    "id": int(local_match['movieId']) if local_match else f"ai-{i}",
+                    "title": fix_title(local_match['title']) if local_match else r['title'],
+                    "genres": local_match['genres'] if local_match else r['genres'],
+                    "reason": r['reason'],
+                    "predicted_rating": round(4.5 - (i * 0.1), 2),
+                    "rank": i + 1
+                }
+                final_recos.append(reco_obj)
 
-        return jsonify({
-            "status": "ok",
-            "ai_status": get_ai_status(),
-            "source_movie": {"title": movie_title},
-            "recommendations": final_recos
-        })
+            return jsonify({
+                "status": "ok",
+                "ai_status": get_ai_status(),
+                "source_movie": {"title": movie_title},
+                "recommendations": final_recos
+            })
 
     # --- STANDARD HYBRID MODE ---
     if not movies or tfidf is None:
@@ -338,34 +331,49 @@ def recommend_by_movie():
             "predicted_rating": round(denormalize(sim_score), 2)
         })
 
-    # The AI Brain takes over
-    print(f"Brain re-ranking {len(candidates)} movies for {source_info['title']}...")
-    ai_ranked = analyze_and_rerank(source_info, candidates)
-    
+    # The AI Brain takes over if enabled
+    use_ai = body.get("use_ai", True)
     final_results = []
-    if ai_ranked:
-        final_results = ai_ranked[:10]
-    else:
-        final_results = candidates[:10]
-
-    # Personalized AI Explanations
-    explanations = get_movie_explanation(source_info, final_results)
     
-    resp_reco = []
-    for i, r in enumerate(final_results):
-        reason = explanations[i] if i < len(explanations) else "Similar themes and genres."
-        if reason == "INVALID":
-            continue
-        r["rank"] = len(resp_reco) + 1
-        r["reason"] = reason
-        resp_reco.append(r)
-        if len(resp_reco) >= 10:
-            break
+    if use_ai:
+        print(f"Brain re-ranking candidates for {source_info['title']}...")
+        # Send only top 15 for local AI efficiency
+        ai_ranked = analyze_and_rerank(source_info, candidates[:15])
+        if ai_ranked:
+            final_results = ai_ranked[:10]
+        else:
+            final_results = candidates[:10]
+
+        # Personalized AI Explanations
+        explanations = get_movie_explanation(source_info, final_results)
+        
+        resp_reco = []
+        for i, r in enumerate(final_results):
+            reason = explanations[i] if i < len(explanations) else "Similar themes and genres."
+            if reason == "INVALID":
+                continue
+            r["rank"] = len(resp_reco) + 1
+            r["reason"] = reason
+            resp_reco.append(r)
+            if len(resp_reco) >= 10:
+                break
+    else:
+        # No re-ranking, just take top candidates and use templates
+        final_results = candidates[:10]
+        from llm_utils import get_movie_explanation as template_explainer
+        # Call with AI disabled (it will use templates)
+        explanations = template_explainer(source_info, final_results)
+        
+        resp_reco = []
+        for i, r in enumerate(final_results):
+            r["rank"] = i + 1
+            r["reason"] = explanations[i] if i < len(explanations) else "Related content."
+            resp_reco.append(r)
 
     return jsonify({
         "source_movie": source_info,
         "recommendations": resp_reco,
-        "ai_status": get_ai_status()
+        "ai_status": get_ai_status() if use_ai else "Standard (Local Only)"
     })
 
 @app.route('/api/posters/batch', methods=['POST'])
@@ -475,9 +483,8 @@ def serve_asset(filename):
 
 # ─── Run ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    print("\nFlask API ->  http://localhost:5000")
+    print("\nFlask API ->  http://localhost:5005")
     print("    GET  /movies")
     print("    POST /recommend")
     print("    POST /recommend-by-movie  (cold start)\n")
-    # Use port 5005 to bypass stale ghost processes on previous ports
     app.run(host="0.0.0.0", port=5005, debug=False)

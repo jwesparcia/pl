@@ -1,6 +1,7 @@
 import json
 import random
 import re
+import time
 import requests
 import os
 from dotenv import load_dotenv
@@ -13,7 +14,8 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemini-2.0-flash-001")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral")
+AI_PRIORITY = os.getenv("AI_PRIORITY", "gemini").lower()
 
 
 class LLMProvider:
@@ -21,106 +23,188 @@ class LLMProvider:
         self.provider_type = None
         self.model_name = None
         self.gemini_client = None
+        self._last_error = None  # Track last error for status reporting
+        self._failed_providers = set()  # Track providers that persistently fail
         self._initialize()
 
     def _initialize(self):
-        """Try providers in order: OpenRouter -> Gemini -> Ollama"""
+        """Try providers in order based on preference: AI_PRIORITY"""
         
-        # 1. Try OpenRouter (Priotized if key is set)
-        if OPENROUTER_API_KEY and OPENROUTER_API_KEY != "your_openrouter_key_here":
-            try:
-                self.provider_type = "openrouter"
-                self.model_name = OPENROUTER_MODEL or "google/gemini-2.0-flash-lite-preview-02-05:free"
-                print(f"AI Provider initialized: {self.provider_type} ({self.model_name})")
-                return
-            except Exception as e:
-                print(f"OpenRouter initialization failed: {e}")
+        # Determine check order
+        check_order = ["openrouter", "gemini", "ollama"]
+        if AI_PRIORITY == "ollama":
+            check_order = ["ollama", "gemini", "openrouter"]
+        elif AI_PRIORITY == "gemini":
+            check_order = ["gemini", "openrouter", "ollama"]
 
-        # 2. Try Google Gemini (SDK)
-        if GEMINI_API_KEY and GEMINI_API_KEY != "your_gemini_key_here":
-            try:
-                from google import genai
-                self.gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-                self.provider_type = "gemini"
-                self.model_name = "gemini-flash-lite-latest"
-                print(f"AI Provider initialized: {self.provider_type} ({self.model_name})")
-                return
-            except Exception as e:
-                print(f"Gemini initialization failed: {e}")
+        for provider in check_order:
+            if self.provider_type: break # Already found a primary
 
-        # 3. Try Ollama (Local)
-        try:
-            import requests as req
-            resp = req.get("http://localhost:11434/api/tags", timeout=2)
-            if resp.status_code == 200:
-                self.provider_type = "ollama"
-                self.model_name = "mistral" # Default
-                print(f"AI Provider initialized: {self.provider_type} (Ollama)")
-                return
-        except:
-            pass
+            if provider == "openrouter":
+                if OPENROUTER_API_KEY and OPENROUTER_API_KEY != "your_openrouter_key_here":
+                    self.provider_type = "openrouter"
+                    self.model_name = OPENROUTER_MODEL or "google/gemini-2.0-flash-lite-preview-02-05:free"
+                    print(f"AI Provider initialized: {self.provider_type} ({self.model_name})")
 
-        self.provider_type = None
-        print("No AI Provider initialized. Using template engine.")
+            elif provider == "gemini":
+                if GEMINI_API_KEY and GEMINI_API_KEY != "your_gemini_key_here":
+                    try:
+                        from google import genai
+                        self.gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+                        self.provider_type = "gemini"
+                        self.model_name = "gemini-2.0-flash"
+                        print(f"AI Provider initialized: {self.provider_type} ({self.model_name})")
+                    except Exception as e:
+                        print(f"Gemini initialization failed: {e}")
 
-    def generate_content(self, prompt: str) -> str:
-        """Central hub for AI generation with auto-fallback between providers."""
+            elif provider == "ollama":
+                try:
+                    resp = requests.get(f"{OLLAMA_URL}/api/tags", timeout=2)
+                    if resp.status_code == 200:
+                        models = [m['name'] for m in resp.json().get('models', [])]
+                        found = next((m for m in models if OLLAMA_MODEL in m), None)
+                        if found or not self.provider_type:
+                            self.provider_type = "ollama"
+                            self.model_name = found or OLLAMA_MODEL
+                            print(f"AI Provider initialized: {self.provider_type} ({self.model_name})")
+                except:
+                    pass
+
+        # Final check for Ollama as fallback if not primary
+        if self.provider_type != "ollama":
+             try:
+                resp = requests.get(f"{OLLAMA_URL}/api/tags", timeout=1)
+                if resp.status_code == 200:
+                    print("Ollama detected (available as fallback).")
+             except: pass
+
+        if not self.provider_type:
+            print("No AI Provider initialized. Using template engine.")
+
+        if not self.provider_type:
+            print("No AI Provider initialized. Using template engine.")
+
+    def generate_content(self, prompt: str, max_retries=1) -> str:
+        """Central hub for AI generation with auto-fallback between providers.
         
-        # Determine the order of attempts
+        Uses fast-fail strategy: if a provider fails with auth/quota errors,
+        it's marked as failed and skipped on subsequent calls this session.
+        """
+        
+        # Determine the order of attempts based on preference and priority
         providers_to_try = []
-        if self.provider_type == "openrouter":
+        if AI_PRIORITY == "ollama":
+            providers_to_try = ["ollama", "gemini", "openrouter"]
+        elif self.provider_type == "openrouter":
             providers_to_try = ["openrouter", "gemini", "ollama"]
         elif self.provider_type == "gemini":
             providers_to_try = ["gemini", "openrouter", "ollama"]
         else:
-            providers_to_try = ["openrouter", "gemini", "ollama"]
+            providers_to_try = ["gemini", "openrouter", "ollama"]
 
-        print(f"--- Starting generation chain: {providers_to_try} ---")
+        # Filter out providers that have persistently failed
+        active_providers = [p for p in providers_to_try if p not in self._failed_providers]
+        
+        if not active_providers:
+            print("--- All AI providers have failed. Using templates. ---")
+            return None
 
-        for provider in providers_to_try:
+        print(f"--- Starting generation chain: {active_providers} ---")
+
+        for provider in active_providers:
             try:
                 if provider == "gemini" and self.gemini_client:
-                    print(f"--- Attempting Gemini (gemini-flash-lite-latest) ---")
-                    response = self.gemini_client.models.generate_content(
-                        model="gemini-flash-lite-latest",
-                        contents=prompt
-                    )
-                    if response.text:
-                        print("--- Gemini Success ---")
-                        return response.text
+                    if GEMINI_API_KEY and GEMINI_API_KEY != "your_gemini_key_here":
+                        for attempt in range(max_retries + 1):
+                            try:
+                                print(f"--- Attempting Gemini (gemini-2.0-flash) [attempt {attempt+1}] ---")
+                                response = self.gemini_client.models.generate_content(
+                                    model="gemini-2.0-flash",
+                                    contents=prompt
+                                )
+                                if response and response.text:
+                                    print("--- Gemini Success ---")
+                                    self._last_error = None
+                                    # Clear from failed list on success
+                                    self._failed_providers.discard("gemini")
+                                    return response.text
+                            except Exception as e:
+                                error_str = str(e)
+                                if "429" in error_str or "quota" in error_str.lower() or "rate" in error_str.lower():
+                                    # Rate limited — short wait, then try once more
+                                    retry_match = re.search(r'retry in (\d+\.?\d*)', error_str.lower())
+                                    wait_time = float(retry_match.group(1)) if retry_match else 3.0
+                                    wait_time = min(wait_time, 5)  # Cap at 5s to avoid long hangs
+                                    if attempt < max_retries:
+                                        print(f"Gemini rate limited. Waiting {wait_time:.1f}s before retry {attempt+2}...")
+                                        time.sleep(wait_time)
+                                        continue
+                                    else:
+                                        print(f"Gemini rate limit exhausted. Marking as failed for this session.")
+                                        self._last_error = "rate_limited"
+                                        self._failed_providers.add("gemini")
+                                elif "daily" in error_str.lower() or "limit: 0" in error_str.lower():
+                                    # Daily quota exhausted — don't retry at all
+                                    print(f"Gemini daily quota exhausted. Skipping for this session.")
+                                    self._last_error = "rate_limited"
+                                    self._failed_providers.add("gemini")
+                                else:
+                                    print(f"Gemini error: {error_str[:200]}")
+                                    self._last_error = "gemini_error"
+                                break  # Don't retry non-rate-limit errors
                 
                 if provider == "openrouter" and OPENROUTER_API_KEY and OPENROUTER_API_KEY != "your_openrouter_key_here":
-                    print(f"--- Attempting OpenRouter ({OPENROUTER_MODEL or 'google/gemini-2.0-flash-lite-preview-02-05:free'}) ---")
+                    import requests
+                    model = OPENROUTER_MODEL or "google/gemini-2.0-flash-lite-preview-02-05:free"
+                    print(f"--- Attempting OpenRouter ({model}) ---")
                     headers = {
                         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                        "HTTP-Referer": "http://localhost:5000",
+                        "HTTP-Referer": "http://localhost:5005",
                         "X-Title": "MovieMind",
                         "Content-Type": "application/json"
                     }
                     payload = {
-                        "model": OPENROUTER_MODEL or "google/gemini-2.0-flash-lite-preview-02-05:free",
+                        "model": model,
                         "messages": [{"role": "user", "content": prompt}]
                     }
-                    resp = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=20)
+                    resp = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=15)
                     if resp.status_code == 200:
                         print("--- OpenRouter Success ---")
+                        self._last_error = None
+                        self._failed_providers.discard("openrouter")
                         return resp.json()['choices'][0]['message']['content']
                     else:
-                        print(f"OpenRouter error: {resp.status_code}")
+                        error_detail = resp.text[:200] if resp.text else "No details"
+                        print(f"OpenRouter error: {resp.status_code} - {error_detail}")
+                        if resp.status_code == 401:
+                            self._last_error = "openrouter_auth"
+                            self._failed_providers.add("openrouter")  # Don't retry invalid keys
+                        else:
+                            self._last_error = f"openrouter_{resp.status_code}"
                 
                 if provider == "ollama":
-                    print(f"--- Attempting Ollama (mistral) ---")
+                    import requests
+                    model = self.model_name or OLLAMA_MODEL
+                    print(f"--- Attempting Ollama ({model}) ---")
                     payload = {
-                        "model": "mistral",
+                        "model": model,
                         "prompt": prompt,
                         "stream": False
                     }
-                    resp = requests.post(f"{OLLAMA_URL}/api/generate", json=payload, timeout=15)
+                    resp = requests.post(f"{OLLAMA_URL}/api/generate", json=payload, timeout=60)
                     if resp.status_code == 200:
                         print("--- Ollama Success ---")
+                        self._last_error = None
+                        self._failed_providers.discard("ollama")
                         return resp.json()['response']
             except Exception as e:
                 print(f"Provider {provider} failed: {e}. Trying next...")
+                self._last_error = f"{provider}_error"
+                # Mark persistent failures (but not timeouts for Ollama)
+                is_timeout = "timeout" in str(e).lower()
+                if not (provider == "ollama" and is_timeout):
+                    if "connection" in str(e).lower() or "refused" in str(e).lower() or "auth" in str(e).lower():
+                        self._failed_providers.add(provider)
         
         return None
 
@@ -132,6 +216,15 @@ ai = LLMProvider()
 def get_ai_status():
     if not ai.provider_type:
         return "Templates (no AI key configured)"
+    
+    # Report actual runtime status
+    if ai._last_error == "rate_limited":
+        return f"Rate Limited — using templates (Gemini quota exhausted)"
+    if ai._last_error == "openrouter_auth":
+        return f"Auth Error — using templates (OpenRouter key invalid)"
+    if ai._last_error and "error" in ai._last_error:
+        return f"AI Offline — using templates"
+    
     if ai.provider_type == "ollama":
         return f"Ollama ({ai.model_name})"
     if ai.provider_type == "openrouter":
@@ -202,20 +295,20 @@ def scout_poster_paths_batch(movie_titles):
 
 # Expanded Sentence structure templates (Fallback only — no AI key)
 TEMPLATES = [
-    "Fallback: Captures the same {style} and {trait} that defined {source}, providing a similar {experience} for fans.",
-    "Fallback: Echoes the {style} found in {source}, particularly through its {trait} and {experience}-driven narrative.",
-    "Fallback: A {adj} match for {source}, sharing {trait} while delivering a unique {style} on {experience}.",
-    "Fallback: Mirrors the {experience} of {source} by utilizing {style} and {trait} to drive the story.",
-    "Fallback: Highly recommended for those who loved {source}'s {trait}; it delivers comparable {style} and {experience}.",
-    "Fallback: A spiritual successor to {source} in terms of {style}, prominently featuring {trait} and a familiar {experience}.",
-    "Fallback: Successfully translates the {experience} from {source} into a fresh context, focusing on {trait} and {style}.",
-    "Fallback: Blends {style} with {trait} to recreate the unique {experience} that made {source} so compelling.",
-    "Fallback: Stands out for its {trait}, which provides the same {style} and {experience} found in {source}.",
-    "Fallback: With a {style} reminiscent of {source}, this film emphasizes {trait} to create a {adj} {experience}.",
-    "Fallback: The {experience} logic here is clearly inspired by {source}, specifically in its use of {style} and {trait}.",
-    "Fallback: While maintaining its own voice, it borrows the {style} from {source} to deliver a {adj} {trait} and {experience}.",
-    "Fallback: An ideal follow-up to {source} because it elevates the {style} and {trait} into a truly {adj} {experience}.",
-    "Fallback: The connection to {source} is palpable through the {trait}, which anchors the {style} and {experience} throughout.",
+    "Captures the same {style} and {trait} that defined {source}, providing a similar {experience} for fans.",
+    "Echoes the {style} found in {source}, particularly through its {trait} and {experience}-driven narrative.",
+    "A {adj} match for {source}, sharing {trait} while delivering a unique {style} on {experience}.",
+    "Mirrors the {experience} of {source} by utilizing {style} and {trait} to drive the story.",
+    "Highly recommended for those who loved {source}'s {trait}; it delivers comparable {style} and {experience}.",
+    "A spiritual successor to {source} in terms of {style}, prominently featuring {trait} and a familiar {experience}.",
+    "Successfully translates the {experience} from {source} into a fresh context, focusing on {trait} and {style}.",
+    "Blends {style} with {trait} to recreate the unique {experience} that made {source} so compelling.",
+    "Stands out for its {trait}, which provides the same {style} and {experience} found in {source}.",
+    "With a {style} reminiscent of {source}, this film emphasizes {trait} to create a {adj} {experience}.",
+    "The {experience} logic here is clearly inspired by {source}, specifically in its use of {style} and {trait}.",
+    "While maintaining its own voice, it borrows the {style} from {source} to deliver a {adj} {trait} and {experience}.",
+    "An ideal follow-up to {source} because it elevates the {style} and {trait} into a truly {adj} {experience}.",
+    "The connection to {source} is palpable through the {trait}, which anchors the {style} and {experience} throughout.",
 ]
 
 VOCABULARY = {

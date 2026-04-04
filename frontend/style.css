@@ -7,37 +7,37 @@
 /* ── 1. Design Tokens ─────────────────────────────────────── */
 :root {
   /* Palette */
-  --bg-base:        #0b0d14;
-  --bg-surface:     #12151f;
-  --bg-card:        #171b28;
-  --bg-card-hover:  #1e2335;
-  --bg-input:       #1a1e2e;
+  --bg-base:        #181a18;
+  --bg-surface:     #222422;
+  --bg-card:        #262826;
+  --bg-card-hover:  #2e302e;
+  --bg-input:       #1e201e;
 
-  --accent-purple:  #7c5cfc;
-  --accent-teal:    #00d4b4;
-  --accent-pink:    #fc5ca0;
-  --accent-gold:    #ffc947;
+  --accent-purple:  #7b8f75;
+  --accent-teal:    #677d67;
+  --accent-pink:    #9b8d7b;
+  --accent-gold:    #d4c591;
 
-  --gradient-hero:  linear-gradient(135deg, #1a0533 0%, #0b1a3a 60%, #01152e 100%);
-  --gradient-card:  linear-gradient(145deg, #1e2335 0%, #131726 100%);
-  --gradient-btn:   linear-gradient(90deg, #7c5cfc 0%, #5c9dfc 100%);
-  --gradient-chip:  linear-gradient(90deg, #7c5cfc44, #00d4b444);
+  --gradient-hero:  #1e221e;
+  --gradient-card:  #262826;
+  --gradient-btn:   #405040;
+  --gradient-chip:  #2e322e;
 
-  --text-primary:   #f0f2ff;
-  --text-secondary: #8b92b8;
-  --text-muted:     #5a6080;
+  --text-primary:   #e8e6e1;
+  --text-secondary: #a8a49c;
+  --text-muted:     #807c74;
 
-  --border:         #252a3e;
-  --border-glow:    #7c5cfc55;
+  --border:         #3a3e3a;
+  --border-glow:    #40504055;
 
-  --radius-card:    16px;
-  --radius-btn:     12px;
-  --radius-chip:    999px;
-  --radius-input:   10px;
+  --radius-card:    8px;
+  --radius-btn:     4px;
+  --radius-chip:    16px;
+  --radius-input:   4px;
 
-  --shadow-card:    0 8px 32px #00000055, 0 0 0 1px #ffffff08;
-  --shadow-glow:    0 0 20px #7c5cfc44, 0 0 60px #7c5cfc18;
-  --shadow-btn:     0 4px 24px #7c5cfc55;
+  --shadow-card:    0 2px 8px rgba(0,0,0,0.05);
+  --shadow-glow:    none;
+  --shadow-btn:     none;
 
   --transition:     0.25s ease;
   --font:           'Inter', system-ui, sans-serif;
@@ -91,10 +91,7 @@ img { display: block; max-width: 100%; }
 .logo-text {
   font-size:   1.6rem;
   font-weight: 800;
-  background:  linear-gradient(90deg, var(--accent-purple), var(--accent-teal));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  color: var(--text-primary);
 }
 
 h1 {
@@ -276,8 +273,8 @@ input:checked + .ai-slider:before {
   padding: 14px 24px;
   margin-bottom: 20px;
   border-radius: var(--radius-card);
-  background: linear-gradient(90deg, #7c5cfc22, #00d4b422);
-  border: 1px solid var(--accent-purple);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
 }
 .because-label {
   font-size: 0.85rem;
@@ -289,10 +286,7 @@ input:checked + .ai-slider:before {
 .because-title {
   font-size: 1.1rem;
   font-weight: 700;
-  background: linear-gradient(90deg, var(--accent-purple), var(--accent-teal));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  color: var(--accent-teal);
 }
 
 .input-label {
@@ -454,7 +448,7 @@ input:checked + .ai-slider:before {
   animation:   fadeIn 0.5s ease;
 }
 .ai-badge::before {
-  content: "✨";
+  content: "AI";
   margin-right: 6px;
   font-size: 0.85rem;
 }
@@ -589,6 +583,7 @@ input:checked + .ai-slider:before {
   padding:       2px 9px;
 }
 
+
 .card-rating {
   display:     flex;
   align-items: center;
@@ -599,6 +594,18 @@ input:checked + .ai-slider:before {
   font-size:   0.82rem;
   font-weight: 600;
   color:        var(--text-secondary);
+}
+
+.card-reason {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  font-style: italic;
+  line-height: 1.4;
+  margin-top: 4px;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
 }
 
 /* ── 9. Browse Section ────────────────────────────────────── */
@@ -715,6 +722,16 @@ input:checked + .ai-slider:before {
   border-radius: 10px;
   padding:     14px 16px;
   line-height: 1.55;
+}
+#modal-reason {
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  background: rgba(255,255,255,0.03);
+  padding: 16px;
+  border-radius: 12px;
+  border-left: 3px solid var(--accent-teal);
+  margin-top: 10px;
 }
 .modal-explanation strong { color: var(--text-primary); }
 
