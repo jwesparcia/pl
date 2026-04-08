@@ -7,28 +7,28 @@
 /* ── 1. Design Tokens ─────────────────────────────────────── */
 :root {
   /* Palette */
-  --bg-base:        #181a18;
-  --bg-surface:     #222422;
-  --bg-card:        #262826;
-  --bg-card-hover:  #2e302e;
-  --bg-input:       #1e201e;
+  --bg-base:        #0B0E14;
+  --bg-surface:     #131722;
+  --bg-card:        #1A202C;
+  --bg-card-hover:  #202837;
+  --bg-input:       #0F131A;
 
-  --accent-purple:  #7b8f75;
-  --accent-teal:    #677d67;
-  --accent-pink:    #9b8d7b;
-  --accent-gold:    #d4c591;
+  --accent-purple:  #8b5cf6;
+  --accent-teal:    #06b6d4;
+  --accent-pink:    #ec4899;
+  --accent-gold:    #f59e0b;
 
-  --gradient-hero:  #1e221e;
-  --gradient-card:  #262826;
-  --gradient-btn:   #405040;
-  --gradient-chip:  #2e322e;
+  --gradient-hero:  linear-gradient(135deg, #0B0E14 0%, #131722 100%);
+  --gradient-card:  linear-gradient(180deg, #1A202C 0%, #131722 100%);
+  --gradient-btn:   linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+  --gradient-chip:  linear-gradient(135deg, #3b82f633 0%, #8b5cf633 100%);
 
-  --text-primary:   #e8e6e1;
-  --text-secondary: #a8a49c;
-  --text-muted:     #807c74;
+  --text-primary:   #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-muted:     #64748b;
 
-  --border:         #3a3e3a;
-  --border-glow:    #40504055;
+  --border:         #2D3748;
+  --border-glow:    #8b5cf655;
 
   --radius-card:    8px;
   --radius-btn:     4px;
@@ -119,11 +119,13 @@ h1 {
 }
 
 .panel-inner {
-  background:    var(--bg-surface);
-  border:        1px solid var(--border);
+  background:    rgba(19, 23, 34, 0.75);
+  backdrop-filter: blur(24px) saturate(150%);
+  border:        1px solid rgba(255, 255, 255, 0.05);
+  border-top:    1px solid rgba(255, 255, 255, 0.12);
   border-radius: 20px;
   padding:       28px 32px;
-  box-shadow:    var(--shadow-card), var(--shadow-glow);
+  box-shadow:    0 24px 48px rgba(0,0,0,0.4), var(--shadow-glow);
 }
 
 /* Mode toggle tabs */

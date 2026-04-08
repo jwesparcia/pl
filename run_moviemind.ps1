@@ -44,12 +44,12 @@ try {
 }
 
 # 2. Check for Venv
-if (-not (Test-Path "backend\venv")) {
-    Write-Host "Virtual environment not found in backend\venv." -ForegroundColor Red
+if (-not (Test-Path "venv")) {
+    Write-Host "Virtual environment not found in root directory." -ForegroundColor Red
     exit
 }
 
 # 3. Start the Server
 Write-Host "Starting MovieMind Backend..." -ForegroundColor Cyan
-Set-Location "backend"
-.\venv\Scripts\python.exe app.py
+# Run using the root venv python executable
+.\venv\Scripts\python.exe backend\app.py

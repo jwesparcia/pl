@@ -23,11 +23,12 @@ try:
     SKLEARN_AVAILABLE = True
 except ImportError:
     SKLEARN_AVAILABLE = False
-    print("WARNING: scikit-learn not installed. Search features may be limited.")
+    print("WARNING: scikit-learn not installed.")
+from tensorflow.keras.models import load_model
 from flask import Flask, jsonify, request, abort, send_from_directory, redirect, Response
 from werkzeug.exceptions import HTTPException
 from flask_cors import CORS
-from llm_utils import analyze_and_rerank, get_movie_explanation, get_ai_status, scout_poster_path, scout_poster_paths_batch
+from reco_utils import get_movie_explanation, scout_poster_path, scout_poster_paths_batch
 
 # ─── Setup ───────────────────────────────────────────────────────────────────
 ROOT_DIR     = os.path.dirname(os.path.abspath(__file__))
@@ -46,15 +47,26 @@ def fix_title(title):
     return title
 
 def normalize_title(title):
-    """Normalize for comparison: lowercase, remove special chars, handle articles."""
+    """Normalize for comparison: remove articles, special chars, AND year."""
     t = title.lower().strip()
-    # Remove articles at start: 'the matrix' -> 'matrix'
+    # 1. Remove year: 'matrix (1999)' -> 'matrix'
+    t = re.sub(r'\s*\(\d{4}\)\s*$', '', t)
+    # 2. Remove articles at start: 'the matrix' -> 'matrix'
     t = re.sub(r'^(the|a|an)\s+', '', t)
-    # Remove articles at end of main title: 'matrix, the' -> 'matrix'
-    t = re.sub(r',\s+(the|a|an)\s+(\(\d{4}\))', r' \2', t)
-    # Generic cleanup
-    t = re.sub(r'[^a-z0-9]', '', t)
+    # 3. Remove articles at end of main title: 'matrix, the' -> 'matrix'
+    t = re.sub(r',\s+(the|a|an)', '', t)
+    # 4. Generic cleanup
+    t = re.sub(r'[^a-z0-9\s]', '', t)
     return t
+
+def extract_topics(title):
+    """Extract core thematic tokens for semantic matching."""
+    # Clean and split
+    clean = normalize_title(title)
+    tokens = clean.split()
+    # Remove common filler words
+    stop_words = {'the', 'a', 'an', 'and', 'but', 'or', 'for', 'with', 'on', 'at', 'by', 'of', 'to', 'in', 'is', 'it', 'from'}
+    return set([t for t in tokens if t not in stop_words and len(t) > 2])
 
 
 # ─── Serve frontend index
@@ -70,6 +82,12 @@ MOVIES_JSON_PATH = os.path.join(MODEL_DIR, "movies.json")
 # ─── Load Metadata and initialize Search Index ───────────────────────────────
 tfidf = None
 tfidf_matrix = None
+model = None
+
+# Latent factor cache for algorithmic recommendation (Embedded Similarity)
+MOVIE_EMBEDDINGS = None 
+MOVIE_BIASES = None
+GENRE_IDF = {}
 
 try:
     # Pre-initialize variables
@@ -104,14 +122,61 @@ try:
             if m_data:
                 title2idx[m_data["title"].strip().lower()] = idx
 
+        def preprocess_data(movies_list):
+            """Clean and combine features for TF-IDF."""
+            descriptions = []
+            for m in movies_list:
+                clean_t = re.sub(r'\s*\(\d{4}\)', '', m['title'])
+                genres = m['genres'].replace('|', ' ')
+                descriptions.append(f"{clean_t} {genres}")
+            return descriptions
+
+        def build_similarity_matrix(descriptions):
+            """Initialize TF-IDF globally and return the matrix."""
+            print("Initializing Content-Based Search Index (TF-IDF) ...")
+            vec = TfidfVectorizer(stop_words='english')
+            matrix = vec.fit_transform(descriptions)
+            print("Search Index Ready.")
+            return vec, matrix
+
         # Initialize TF-IDF for the "Brain" candidate generation
         if SKLEARN_AVAILABLE:
-            print("Initializing AI Search Index (TF-IDF) ...")
-            # Combine title and genres for richer search
-            movie_descriptions = [f"{m['title']} {m['genres'].replace('|', ' ')}" for m in movies]
-            tfidf = TfidfVectorizer(stop_words='english')
-            tfidf_matrix = tfidf.fit_transform(movie_descriptions)
-            print("Search Index Ready.")
+            movie_descriptions = preprocess_data(movies)
+            tfidf, tfidf_matrix = build_similarity_matrix(movie_descriptions)
+
+        # Load Keras model
+        if os.path.exists(MODEL_PATH):
+            print(f"Loading Keras model from {MODEL_PATH}...")
+            model = load_model(MODEL_PATH)
+            print("Model Loaded.")
+            
+            # --- EXTRACT LATENT FACTORS FOR ALGORITHM IMPROVEMENT ---
+            try:
+                # Extract Embeddings (9724, 50) and Biases (9724, 1)
+                for layer in model.layers:
+                    if layer.name == "movie_embedding":
+                        MOVIE_EMBEDDINGS = layer.get_weights()[0]
+                    elif layer.name == "movie_bias":
+                        MOVIE_BIASES = layer.get_weights()[0]
+                print("Latent features (embeddings/biases) cached.")
+                
+                # --- CALCULATE GENRE IDF ---
+                all_genres = []
+                for m in movies:
+                    all_genres.extend(m['genres'].split('|'))
+                
+                N = len(movies)
+                genre_counts = {}
+                for g in all_genres:
+                    genre_counts[g] = genre_counts.get(g, 0) + 1
+                
+                # IDF = log(N / genre_count)
+                # This ensures rare genres (Film-Noir) have higher weighting than common ones (Drama)
+                GENRE_IDF = {g: np.log(N / count) for g, count in genre_counts.items()}
+                print(f"Genre IDF table built for {len(GENRE_IDF)} genres.")
+                
+            except Exception as e:
+                print(f"Warning: Failed to extract latent features from model: {e}")
 
     print(f"Metadata loaded -- {len(user2idx)} users, {len(movie2idx)} movies")
 except Exception as e:
@@ -156,8 +221,7 @@ def health():
     return jsonify({
         "status": "ok", 
         "index_loaded": tfidf_matrix is not None, 
-        "meta_loaded": len(movies) > 0,
-        "ai_status": get_ai_status()
+        "meta_loaded": len(movies) > 0
     })
 
 
@@ -191,102 +255,73 @@ def recommend():
     user_id = body.get("user_id")
     if user_id is None:
         abort(400, description="Missing 'user_id'.")
+    
+    # Collaborative Filtering Logic
+    if not model or not user2idx:
+        abort(503, description="Model or User indices not loaded.")
 
-    # Let the AI Brain re-rank if enabled
-    use_ai = body.get("use_ai", True)
-    source_context = {"title": "Trending Favorites", "genres": "Variety"}
+    try:
+        user_id_int = int(user_id)
+        if user_id_int not in user2idx:
+            # Fallback for new users (cold start) -> return top rated movies
+            results = sorted(movies, key=lambda x: x.get('avg_rating', 0), reverse=True)[:20]
+        else:
+            u_idx = user2idx[user_id_int]
+            m_indices = list(movie2idx.values())
+            m_ids = list(movie2idx.keys())
+            
+            # Predict for all movies in parallel (vectorized)
+            user_input = np.array([u_idx] * len(m_indices))
+            movie_input = np.array(m_indices)
+            
+            preds = model.predict([user_input, movie_input], batch_size=512, verbose=0).flatten()
+            
+            # Denormalize and pair with movie objects
+            results = []
+            for i, p in enumerate(preds):
+                m_id = m_ids[i]
+                m_data = movie_id_map.get(m_id)
+                if m_data:
+                    results.append({
+                        "id": m_id,
+                        "title": fix_title(m_data["title"]),
+                        "genres": m_data["genres"],
+                        "score": float(p),
+                        "predicted_rating": round(denormalize(p), 2)
+                    })
+            
+            results.sort(key=lambda x: x["score"], reverse=True)
+            results = results[:50] # Get top 50 candidates
+    except Exception as e:
+        print(f"Prediction Error: {e}")
+        abort(500, description="Internal error during recommendations.")
+
+    source_context = {"title": "Your Profile", "genres": "Various"}
     
     final_pool = results[:10]
-    if use_ai:
-        ai_ranked = analyze_and_rerank(source_context, results)
-        if ai_ranked:
-            final_pool = ai_ranked[:10]
-
-        # Explain
-        explanations = get_movie_explanation(source_context, final_pool)
-        for i, r in enumerate(final_pool):
-            r["rank"] = i + 1
-            r["reason"] = explanations[i] if i < len(explanations) else "Highly rated in our system."
-    else:
-        for i, r in enumerate(final_pool):
-            r["rank"] = i + 1
-            r["reason"] = "Based on trending library favorites."
+    for i, r in enumerate(final_pool):
+        r["rank"] = i + 1
+        r["reason"] = "Based on your viewing history and preferences."
 
     return jsonify({
-        "recommendations": final_pool,
-        "ai_status": get_ai_status() if use_ai else "Standard (Local Only)"
+        "recommendations": final_pool
     })
 
 
 # ─── Cold Start: Recommend by movie title (dummy user) ────────────────────────
 DUMMY_USER_ID = 9999  # Virtual user for cold-start recommendations
 
-@app.route("/recommend-by-movie", methods=["POST"])
-def recommend_by_movie():
-    """
-    AI Brain: Find similar movies via TF-IDF and re-rank with Gemini OR use Pure AI mode.
-    """
-    body = request.get_json(force=True, silent=True) or {}
-    movie_title = body.get("movie_title", "").strip()
-    is_pure_ai = body.get("pure_ai", False)
-
-    if not movie_title:
-        abort(400, description="Missing 'movie_title'.")
-
-    from llm_utils import get_pure_ai_reco, get_ai_status
-
-    if is_pure_ai:
-        print(f"--- RUNNING PURE AI MODE for '{movie_title}' ---")
-        # 1. Get raw suggestions from AI
-        ai_recos = get_pure_ai_reco(movie_title, n=12)
-        
-        if not ai_recos:
-            print("--- PURE AI FAILED. FALLING BACK TO STANDARD HYBRID SEARCH ---")
-            is_pure_ai = False
-        else:
-            # 2. Enrich with local IDs/metadata if available
-            final_recos = []
-            for i, r in enumerate(ai_recos):
-                # Try to find local match for ID and consistent genres
-                local_match = None
-                q_norm = normalize_title(r['title'])
-                for m in movies:
-                    if q_norm == normalize_title(m['title']):
-                        local_match = m
-                        break
-                
-                reco_obj = {
-                    "id": int(local_match['movieId']) if local_match else f"ai-{i}",
-                    "title": fix_title(local_match['title']) if local_match else r['title'],
-                    "genres": local_match['genres'] if local_match else r['genres'],
-                    "reason": r['reason'],
-                    "predicted_rating": round(4.5 - (i * 0.1), 2),
-                    "rank": i + 1
-                }
-                final_recos.append(reco_obj)
-
-            return jsonify({
-                "status": "ok",
-                "ai_status": get_ai_status(),
-                "source_movie": {"title": movie_title},
-                "recommendations": final_recos
-            })
-
-    # --- STANDARD HYBRID MODE ---
-    if not movies or tfidf is None:
-        abort(503, description="Search index not ready.")
-
-    # Find the movie in our library (Search Ranking)
+def recommend_movies(movie_title, movies_list, tfidf_mat):
+    """Return top 10 similar movies based purely on TF-IDF cosine similarity."""
     q_norm = normalize_title(movie_title)
     q_raw = movie_title.lower().strip()
     
     matches = []
-    for i, m in enumerate(movies):
+    for i, m in enumerate(movies_list):
         m_title = m['title'].lower()
         m_fixed = fix_title(m['title']).lower()
         m_norm = normalize_title(m['title'])
         
-        # Scoring: 3=Exact, 2=Starts with, 1=Contains
         score = 0
         if q_raw == m_title or q_raw == m_fixed or (q_norm and q_norm == m_norm):
             score = 3
@@ -299,81 +334,85 @@ def recommend_by_movie():
             matches.append((score, i, m))
             
     if not matches:
-        abort(404, description="Movie not found.")
-
-    # Sort matches: Best score first, then shorter titles (better match)
+        return None, None
+        
     matches.sort(key=lambda x: (-x[0], len(x[2]['title'])))
-    
     _, source_idx, source_data = matches[0]
+    
     source_info = {
         "id": int(source_data["movieId"]),
         "title": fix_title(source_data["title"]),
         "genres": source_data["genres"]
     }
-
-    # Use TF-IDF to find top 50 candidates
-    query_vec = tfidf_matrix[source_idx]
-    cosine_sim = cosine_similarity(query_vec, tfidf_matrix).flatten()
     
-    # Get top 51 (including itself)
-    top_indices = np.argsort(cosine_sim)[-51:][::-1]
+    # TF-IDF Similarity (Cosine)
+    query_vec = tfidf_mat[source_idx]
+    tfidf_sims = cosine_similarity(query_vec, tfidf_mat).flatten()
+    
+    # Get top unique candidates
+    top_indices = np.argsort(tfidf_sims)[::-1]
     
     candidates = []
+    seen_ids = set()
+    
     for idx in top_indices:
-        if idx == source_idx: continue
-        m = movies[idx]
-        sim_score = float(cosine_sim[idx])
+        if idx == source_idx:
+            continue
+        m = movies_list[idx]
+        m_id = m['movieId']
+        if m_id in seen_ids:
+            continue
+            
+        sim_score = float(tfidf_sims[idx])
+        if sim_score <= 0.01: # Filter out absolute zero matches
+            continue
+            
+        seen_ids.add(m_id)
         candidates.append({
             "id": int(m["movieId"]),
             "title": fix_title(m["title"]),
             "genres": m["genres"],
             "score": sim_score,
-            "predicted_rating": round(denormalize(sim_score), 2)
+            "predicted_rating": round(min(5.0, max(0.5, sim_score * 5.0 + 2.5)), 2) # Pseudo rating based on score
         })
+        
+        if len(candidates) >= 10:
+            break
+            
+    return source_info, candidates
 
-    # The AI Brain takes over if enabled
-    use_ai = body.get("use_ai", True)
-    final_results = []
+@app.route("/recommend-by-movie", methods=["POST"])
+def recommend_by_movie():
+    """
+    Find similar movies using clean TF-IDF Content-Based filtering.
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    movie_title = body.get("movie_title", "").strip()
+
+    if not movie_title:
+        abort(400, description="Missing 'movie_title'.")
+
+    if not movies or tfidf_matrix is None:
+        abort(503, description="Search index not ready.")
+
+    source_info, final_results = recommend_movies(movie_title, movies, tfidf_matrix)
+
+    if not source_info or not final_results:
+        abort(404, description="Movie not found or no recommendations available.")
+
+    # Generate procedural explanations
+    from reco_utils import get_movie_explanation as template_explainer
+    explanations = template_explainer(source_info, final_results)
     
-    if use_ai:
-        print(f"Brain re-ranking candidates for {source_info['title']}...")
-        # Send only top 15 for local AI efficiency
-        ai_ranked = analyze_and_rerank(source_info, candidates[:15])
-        if ai_ranked:
-            final_results = ai_ranked[:10]
-        else:
-            final_results = candidates[:10]
-
-        # Personalized AI Explanations
-        explanations = get_movie_explanation(source_info, final_results)
-        
-        resp_reco = []
-        for i, r in enumerate(final_results):
-            reason = explanations[i] if i < len(explanations) else "Similar themes and genres."
-            if reason == "INVALID":
-                continue
-            r["rank"] = len(resp_reco) + 1
-            r["reason"] = reason
-            resp_reco.append(r)
-            if len(resp_reco) >= 10:
-                break
-    else:
-        # No re-ranking, just take top candidates and use templates
-        final_results = candidates[:10]
-        from llm_utils import get_movie_explanation as template_explainer
-        # Call with AI disabled (it will use templates)
-        explanations = template_explainer(source_info, final_results)
-        
-        resp_reco = []
-        for i, r in enumerate(final_results):
-            r["rank"] = i + 1
-            r["reason"] = explanations[i] if i < len(explanations) else "Related content."
-            resp_reco.append(r)
+    resp_reco = []
+    for i, r in enumerate(final_results):
+        r["rank"] = i + 1
+        r["reason"] = explanations[i] if i < len(explanations) else "Related content."
+        resp_reco.append(r)
 
     return jsonify({
         "source_movie": source_info,
-        "recommendations": resp_reco,
-        "ai_status": get_ai_status() if use_ai else "Standard (Local Only)"
+        "recommendations": resp_reco
     })
 
 @app.route('/api/posters/batch', methods=['POST'])
@@ -396,7 +435,7 @@ def get_posters_batch():
             missing_titles.append(t)
             
     if missing_titles:
-        from llm_utils import scout_poster_paths_batch
+        from reco_utils import scout_poster_paths_batch
         with batch_semaphore:
             batch_results = scout_poster_paths_batch(missing_titles)
             
@@ -442,7 +481,7 @@ def get_poster(movie_title):
             if movie_title in poster_cache:
                 target_url = poster_cache[movie_title]
             else:
-                from llm_utils import scout_poster_path
+                from reco_utils import scout_poster_path
                 try:
                     scout_title = re.sub(r'\s*\(\d{4}\)$', '', movie_title)
                     print(f"--- Scouting IMDB poster for: {scout_title} ---")

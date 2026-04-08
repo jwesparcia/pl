@@ -84,7 +84,6 @@ const browseGrid     = document.getElementById("browse-grid");
 const movieSearch    = document.getElementById("movie-search");
 const loadMoreBtn    = document.getElementById("load-more-btn");
 const modalTemplate  = document.getElementById("modal-template");
-const aiBadge        = document.getElementById("ai-badge");
 let   activeModal    = null;
 
 // Mode toggle
@@ -281,15 +280,13 @@ document.addEventListener("click", e => {
    (The "Dummy User" approach)
 ═══════════════════════════════════════════════════════════ */
 async function getRecommendationsByMovie(title) {
-  const isPureAI = document.getElementById('pure-ai-toggle').checked;
-  
   if (!title || !title.trim()) {
     setStatus("Please type a movie title first.", "error");
     return;
   }
 
   setLoading(true);
-  setStatus(isPureAI ? `AI is exploring the multiverse for "${title}"...` : `AI is analyzing connections for "${title}"...`);
+  setStatus(`🧠 Analyzing complex connections... (This takes 20-40s)`);
   movieGrid.innerHTML = "";
   resultsHeader.hidden = true;
   becauseBanner.hidden = true;
@@ -299,9 +296,7 @@ async function getRecommendationsByMovie(title) {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
       body:    JSON.stringify({ 
-        movie_title: title,
-        pure_ai: isPureAI,
-        use_ai: isPureAI || document.getElementById('pure-ai-toggle').checked // Correctly pass AI state
+        movie_title: title
        }),
     });
 
@@ -311,18 +306,12 @@ async function getRecommendationsByMovie(title) {
     }
 
     const data = await res.json();
-    const { source_movie, recommendations, ai_status } = data;
+    const { source_movie, recommendations } = data;
     lastRecommendations = recommendations;
 
     if (!recommendations.length) {
       setStatus("No similar movies found.", "error");
       return;
-    }
-
-    // Show AI Provider badge
-    if (aiBadge) {
-      aiBadge.textContent = `Powered by ${ai_status || "Templates"}`;
-      aiBadge.hidden = false;
     }
 
     // Show "Because you liked" banner
@@ -361,19 +350,17 @@ async function getRecommendations() {
   }
 
   setLoading(true);
-  setStatus(`AI is re-ranking top picks for User ${userId}...`);
+  setStatus(`🧠 Analyzing top picks for User ${userId}...`);
   movieGrid.innerHTML = "";
   resultsHeader.hidden = true;
   becauseBanner.hidden = true;
 
   try {
-    const isAIEnabled = document.getElementById('pure-ai-toggle').checked;
     const res = await fetch(`${API_BASE}/recommend`, {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
       body:    JSON.stringify({ 
-        user_id: userId,
-        use_ai: isAIEnabled
+        user_id: userId
       }),
     });
 
@@ -383,18 +370,12 @@ async function getRecommendations() {
     }
 
     const data = await res.json();
-    const { recommendations, ai_status } = data;
+    const { recommendations } = data;
     lastRecommendations = recommendations;
 
     if (!recommendations.length) {
       setStatus("⚠️  No recommendations found for this user.", "error");
       return;
-    }
-
-    // Show AI Provider badge
-    if (aiBadge) {
-      aiBadge.textContent = `Powered by ${ai_status || "Templates"}`;
-      aiBadge.hidden = false;
     }
 
     setStatus(`Top ${recommendations.length} picks for User ${userId}`);

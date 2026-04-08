@@ -31,8 +31,8 @@
       <div class="logo">
         <span class="logo-text">MovieMind</span>
       </div>
-      <h1>Your Personal Movie&nbsp;AI</h1>
-      <p class="hero-sub">Collaborative filtering powered recommendations — trained on real MovieLens data.</p>
+      <h1>Movie Recommendations</h1>
+      <p class="hero-sub">Content-based similarity engine — trained on real MovieLens data.</p>
     </div>
   </header>
 
@@ -53,14 +53,7 @@
           </button>
         </div>
         
-        <!-- Pure AI Toggle -->
-        <div class="ai-toggle-wrapper" id="ai-toggle-container">
-          <span class="ai-toggle-label" title="Let AI suggest movies not in our local database">AI Mode</span>
-          <label class="ai-switch">
-            <input type="checkbox" id="pure-ai-toggle" checked>
-            <span class="ai-slider"></span>
-          </label>
-        </div>
+
 
         <!-- Mode 1: Movie title search (cold start / default) -->
         <div class="input-group mode-panel active" id="panel-movie">
@@ -113,7 +106,6 @@
       <div class="results-header" id="results-header" hidden>
         <div class="results-title-group">
           <h2 id="results-title">Top Picks for You</h2>
-          <div id="ai-badge" class="ai-badge"></div>
         </div>
         <span class="results-count" id="results-count"></span>
       </div>
