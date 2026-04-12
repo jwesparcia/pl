@@ -1,6 +1,8 @@
 """
 =============================================================================
-app.py — Flask REST API for the Movie Recommendation System (Keras)
+app.py — Flask REST API for the Movie Recommendation Engine
+This module orchestrates the Flask backend, handling API requests,
+candidate retrieval, and hybrid scoring logic.
 =============================================================================
 """
 
@@ -35,10 +37,11 @@ ROOT_DIR     = os.path.dirname(os.path.abspath(__file__))
 FRONTEND_DIR = os.path.abspath(os.path.join(ROOT_DIR, "..", "frontend"))
 MODEL_DIR    = os.path.abspath(os.path.join(ROOT_DIR, "..", "model"))
 
+# Flask server initialization
 app = Flask(__name__)
 CORS(app)
 
-
+# Utility for title regex formatting (e.g., handling leading articles)
 def fix_title(title):
     """Reformat 'Matrix, The (1999)' → 'The Matrix (1999)'."""
     m = re.match(r'^(.+),\s+(The|A|An)\s+(\(\d{4}\))$', title)
@@ -117,7 +120,7 @@ try:
             movie2idx[m["movieId"]] = idx
             title2idx[m["title"].strip().lower()] = idx
 
-        # ─── IMPROVED: Feature Engineering ────────────────────────────────
+        # ─── Feature Engineering ────────────────────────────────
         # Uses the pre-built "combined" field from build_tmdb_metadata.py.
         # Structure: genres(×2) + keywords + cast(top3) + director + overview
         # This ensures TF-IDF captures thematic, personnel, and plot signals.
@@ -139,7 +142,7 @@ try:
                 descriptions.append(combined)
             return descriptions
 
-        # ─── IMPROVED: TF-IDF Configuration ───────────────────────────────
+        # ─── TF-IDF Configuration ───────────────────────────────
         # max_features bumped from 10k → 15k for richer vocabulary coverage.
         # ngram_range=(1,2) captures bigrams like "space opera", "serial killer".
         def build_similarity_matrix(descriptions):
@@ -315,7 +318,7 @@ def recommend():
 # ─── Cold Start: Recommend by movie title ─────────────────────────────────────
 DUMMY_USER_ID = 9999  # Virtual user for cold-start recommendations
 
-# IMPROVED: Minimum quality threshold — reject anything below this.
+# Minimum quality threshold — reject anything below this.
 # 0.22 is stricter than the old 0.20, ensuring higher specificity.
 SIMILARITY_THRESHOLD = 0.22
 TOP_N = 10  # Number of recommendations to return
@@ -331,24 +334,34 @@ INCOMPATIBLE_GENRES = {
     "Documentary": {"Action", "Science Fiction", "Fantasy"}
 }
 
-# Thematic Bridge words (Force-Match) - Updated for new metadata
-HIGH_VALUE_CONCEPTS = {
-    "simulated_reality", "artificial_intelligence", "dystopia", "time_travel", 
-    "identity", "demonic_possession", "alien_contact", "haunted_house", "animal_loyalty"
+# ─── Thematic Clustering ────────────────────────────────
+# Must align with concepts in build_tmdb_metadata.py
+THEME_CLUSTERS = {
+    "PARANORMAL":   {"paranormal_horror", "haunted_location", "demonic_possession"},
+    "SPACE_SCI_FI": {"space_sci_fi", "space_travel_loop", "alien_contact"},
+    "AI_SCI_FI":    {"ai_sci_fi", "artificial_intelligence"},
+    "FANTASY":      {"epic_fantasy", "magical_world"},
+    "DYSTOPIA":     {"dystopia_apocalypse"},
+    "CRIME_NOIR":   {"noir_thriller", "serial_killer"},
+    "ADVENTURE_SEA": {"maritime_survival"}
 }
 
-# Subgenre definition (must match exactly the ones in metadata script)
-SUBGENRES = {
-    "paranormal_horror", "slasher_horror", "space_sci_fi", "ai_sci_fi", "animal_drama", "noir_thriller"
-}
+def get_movie_clusters(movie):
+    """Maps high-value themes to their respective conceptual clusters."""
+    high_themes = set(movie.get('high_themes', []))
+    themes = set(movie.get('themes', []))
+    combined = high_themes | themes
+    
+    found_clusters = set()
+    for cluster_name, keywords in THEME_CLUSTERS.items():
+        if any(kw in combined for kw in keywords):
+            found_clusters.add(cluster_name)
+    return found_clusters
 
 def recommend_movies(movie_title, movies_list, tfidf_sim_mat, embeddings, user_context=None):
     """
-    Highly optimized recommendation engine using:
-      - Hybrid Similarity (TF-IDF + Semantic Embeddings)
-      - IMDb Weighted Rating
-      - MMR (Maximal Marginal Relevance) for Diversity
-      - Dynamic Modes (Story, Actor, Director)
+    Main recommendation algorithm implementing hybrid similarity.
+    Calculates weights based on semantic vectors, TF-IDF scores, and IMDb ratings.
     """
     q_norm = normalize_title(movie_title)
     q_raw = movie_title.lower().strip()
@@ -426,80 +439,63 @@ def recommend_movies(movie_title, movies_list, tfidf_sim_mat, embeddings, user_c
             m=MIN_VOTES, C=GLOBAL_MEAN_RATING
         ) / 10.0 # Normalize to [0,1]
         
-        target_genres = set(m['genres'].split('|'))
+        # ─── Step 3: PRODUCTION UPGRADE - Hard Filtering Layer ────────────
+        target_high_themes = set(m.get('high_themes', []))
+        source_high_themes = set(source_info.get('high_themes', []))
         
-        # ─── STRICT FILTER: Incompatible Genres ───────────────────────────
+        target_clusters = get_movie_clusters(m)
+        source_clusters = get_movie_clusters(source_data)
+        
+        # 1. Strict Cluster Match: If source is in a cluster, target MUST share it
+        if source_clusters and not (source_clusters & target_clusters):
+            # Exception: extremely high semantic similarity (>0.85)
+            if semantic_sims[idx] < 0.85:
+                continue
+        
+        # 2. Strict Theme Gate: Must share at least one HIGH-VALUE theme if they exist
+        shared_high = source_high_themes & target_high_themes
+        if source_high_themes and not shared_high and not (source_clusters & target_clusters):
+            continue
+
+        # 3. Tone & Genre Compatibility (Incompatible check)
+        target_genres = set(m['genres'].split('|'))
         is_incompatible = False
         for sg in source_genres:
             if sg in INCOMPATIBLE_GENRES and bool(INCOMPATIBLE_GENRES[sg] & target_genres):
-                is_incompatible = True
-                break
+                is_incompatible = True; break
         if is_incompatible: continue
-        
-        # ─── STRICT FILTER: High-Value Theme Requirement ──────────────────
-        target_themes = set(m.get('themes', []))
-        target_high_themes = set(m.get('high_themes', []))
-        source_themes = set(source_info.get('themes', []))
-        source_high_themes = set(source_info.get('high_themes', []))
-        
-        shared_themes = source_themes & target_themes
-        shared_high_themes = source_high_themes & target_high_themes
-        
-        # If the source has a HIGH priority theme, the target MUST share at least one HIGH theme
-        # or be extremely similar in base features
-        if source_high_themes and not shared_high_themes and sim_score < 0.25:
-            continue
-            
+
         # ─── SCORING ──────────────────────────────────────────────────────
         theme_bonus = 0.0
-        must_include_bonus = 0.0
-        subgenre_bonus = 0.0
-        
-        for theme in shared_themes:
-            if theme in SUBGENRES:
-                subgenre_bonus += 0.25
-                must_include_bonus = 0.2
-            elif theme in HIGH_VALUE_CONCEPTS or theme in source_high_themes:
-                theme_bonus += 0.25
-                must_include_bonus = 0.2
-            else:
-                theme_bonus += 0.1
-        
+        # Obvious Match Guarantee: Force match if 2+ high clusters share
+        if len(source_clusters & target_clusters) >= 2:
+            theme_bonus += 0.4
+        elif shared_high:
+            theme_bonus += 0.2
+            
         # 4. Mode-based Overlap Boost
         target_kw = set(m.get('keywords', []))
         shared_kw = source_keywords & target_kw
-        target_cast = set(m.get('cast', []))
-        shared_cast = source_cast & target_cast
         
         mode_bonus = 0.0
         if mode == 'story':
-            # Boost keyword rarity
             rarity_sum = sum([m.get('keyword_rarity', {}).get(kw, 1.0) for kw in shared_kw])
             mode_bonus = min(0.15, rarity_sum / 5000)
-        elif mode == 'actor':
-            mode_bonus = 0.2 if shared_cast else 0.0
         elif mode == 'director':
             mode_bonus = 0.2 if m.get('director') == source_info['director'] else 0.0
 
-        # 5. Personalization Boost
-        pers_bonus = 0.0
-        if liked_ids:
-            pers_bonus = 0.05 if any(tid in liked_ids for tid in [m_id]) else 0.0
-
-        # 6. Noise & Tone Mismatch Filtering
+        # 5. NOISE Penalty (Anti-Generic)
         genre_penalty = 0.0
-        shared_genres = source_genres & target_genres
+        if source_genres & target_genres == set() and not shared_high and not (source_clusters & target_clusters):
+            genre_penalty = -0.3
+
+        # Final production weight adjustments
+        final_score = (sim_score * 0.45) + (wr * 0.15) + theme_bonus + mode_bonus + genre_penalty
         
-        if shared_genres.issubset(GENERIC_GENRES) and not shared_kw and not shared_themes:
-            genre_penalty = -0.15
-            
-        tone_penalty = 0.0
-        if ("Comedy" in source_genres and "Horror" in target_genres) or ("Horror" in source_genres and "Comedy" in target_genres):
-            tone_penalty = -0.2
-        
-        # Final combined score
-        final_score = (sim_score * 0.45) + (wr * 0.25) + theme_bonus + must_include_bonus + subgenre_bonus + mode_bonus + pers_bonus + genre_penalty + tone_penalty
-        
+        target_themes = set(m.get('themes', []))
+        source_themes = set(source_info.get('themes', []))
+        shared_themes = source_themes & target_themes
+
         candidates.append({
             "idx": idx,
             "id": int(m_id),
@@ -509,7 +505,7 @@ def recommend_movies(movie_title, movies_list, tfidf_sim_mat, embeddings, user_c
             "predicted_rating": round(min(5.0, max(0.5, final_score * 5.0 + 2.5)), 2),
             "keywords": list(target_kw),
             "shared_keywords": list(shared_kw),
-            "themes": m.get('themes', []),
+            "themes": list(target_themes),
             "shared_themes": list(shared_themes),
             "cast": m.get('cast', []),
             "director": m.get('director', ''),

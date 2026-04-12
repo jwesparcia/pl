@@ -4,6 +4,9 @@ import os
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
+# Preprocessing pipeline for the TMDB 5000 dataset: performs feature extraction, 
+# token cleaning, and encodes semantic embeddings for the hybrid recommendation model.
+
 # 1. Fetch TMDB 5000 dataset from Hugging Face
 print("Fetching TMDB 5000 dataset from Hugging Face...")
 from datasets import load_dataset
@@ -13,43 +16,45 @@ ds = load_dataset("AiresPucrs/tmdb-5000-movies", split="train")
 print("Initializing Sentence Transformer (all-MiniLM-L6-v2)...")
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
-# ─── High-Concept Theme Map (Prioritized) ───────────────────────────────────
+# ─── High-Concept Theme Map (Prioritized Clustering) ─────────────────────────
 # Mapping cluster keywords to broader conceptual themes with importance ratings.
 THEME_BANK = {
-    # HIGH Priority (Strong identifiers)
-    "simulated_reality":        {"priority": "HIGH", "terms": ["simulation", "virtual reality", "simulated reality", "reality show", "make believe", "pretend"]},
-    "artificial_intelligence":  {"priority": "HIGH", "terms": ["artificial intelligence", "robot", "android", "cyborg", "machine"]},
-    "alien_contact":            {"priority": "HIGH", "terms": ["extraterrestrial", "alien conquest", "first contact", "flying saucer"]},
-    "demonic_possession":       {"priority": "HIGH", "terms": ["demonic", "possession", "devil", "exorcism"]},
-    "haunted_house":            {"priority": "HIGH", "terms": ["haunted house", "ghost", "poltergeist", "apparition"]},
-    "time_travel":              {"priority": "HIGH", "terms": ["time travel", "time loop", "wormhole", "temporal", "time paradox"]},
-    "dystopia":                 {"priority": "HIGH", "terms": ["dystopia", "dystopian", "totalitarian", "oppression"]},
-    "animal_loyalty":           {"priority": "HIGH", "terms": ["human animal relationship", "loyalty", "dog loyalty", "waits for his master", "devotion"]},
-    "existentialism":           {"priority": "HIGH", "terms": ["existentialism", "philosophy", "meaning of life", "consciousness"]},
+    # HIGH Priority (Strong identifiers for Cluster-based filtering)
+    "simulated_reality":        {"priority": "HIGH", "terms": ["simulation", "virtual reality", "simulated reality", "reality show", "videogame", "game world"]},
+    "artificial_intelligence":  {"priority": "HIGH", "terms": ["artificial intelligence", "robot", "android", "cyborg", "machine consciousness"]},
+    "alien_contact":            {"priority": "HIGH", "terms": ["extraterrestrial", "alien conquest", "first contact", "space war", "alien invasion"]},
+    "demonic_possession":       {"priority": "HIGH", "terms": ["demonic", "possession", "devil", "exorcist", "exorcism"]},
+    "haunted_location":         {"priority": "HIGH", "terms": ["haunted house", "ghost", "poltergeist", "apparition", "haunting"]},
+    "time_travel_loop":         {"priority": "HIGH", "terms": ["time travel", "time loop", "wormhole", "temporal", "time paradox", "future", "past"]},
+    "dystopia_apocalypse":      {"priority": "HIGH", "terms": ["dystopia", "dystopian", "totalitarian", "post-apocalyptic", "survival", "cataclysm"]},
+    "maritime_survival":        {"priority": "HIGH", "terms": ["shark", "ocean", "sea", "underwater", "shipwreck", "survival at sea"]},
+    "magical_world":            {"priority": "HIGH", "terms": ["magic", "wizard", "wand", "witchcraft", "sorcerers", "magical school", "fantasy world"]},
+    "serial_killer":            {"priority": "HIGH", "terms": ["serial killer", "maniac", "slasher", "masked killer", "manhunt"]},
     
-    # MEDIUM Priority (Descriptive context)
-    "surveillance":             {"priority": "MED",  "terms": ["surveillance", "hidden camera", "spy", "voyeur", "voyeurism"]},
-    "identity":                  {"priority": "MED",  "terms": ["identity", "amnesia", "identity crisis", "doppelganger", "alter ego"]},
-    "conspiracy":               {"priority": "MED",  "terms": ["conspiracy", "cover-up", "paranoia", "secret society"]},
-    "cyberpunk":                {"priority": "MED",  "terms": ["cyberpunk", "high tech", "futuristic", "virtual world"]},
+    # MEDIUM Priority (Thematic depth)
+    "surveillance":             {"priority": "MED",  "terms": ["surveillance", "hidden camera", "spy", "voyeur", "voyeurism", "big brother"]},
+    "identity_crisis":          {"priority": "MED",  "terms": ["identity", "amnesia", "identity crisis", "doppelganger", "alter ego", "memory loss"]},
+    "conspiracy_paranoia":      {"priority": "MED",  "terms": ["conspiracy", "cover-up", "paranoia", "secret society", "corruption"]},
+    "coming_of_age":            {"priority": "MED",  "terms": ["coming of age", "teenager", "growing up", "youth", "school life"]},
 }
 
-# Explicit Noise/Generic terms to ignore (Low-Value)
+# Explicit Noise/Generic terms to ignore (STRICT Cleaning)
 GENERIC_NOISE = {
     'woman director', 'independent film', 'duringcreditsstinger', 'aftercreditsstinger', 
-    'based on novel', 'musical', 'biography', 'teenager', '3d', 'new york', 'los angeles',
+    'based on novel', 'musical', 'biography', '3d', 'new york', 'los angeles',
     'london england', 'nudity', 'family', 'sex', 'funeral', 'party', 'wedding', 'drug',
-    'japanese', 'life', 'story', 'love', 'friendship', 'friends', 'city', 'farmhouse'
+    'japanese', 'life', 'story', 'love', 'friendship', 'friends', 'city', 'farmhouse',
+    'frog', 'village', 'island', 'small town', 'marriage', 'divorce', 'sequel', 'remake'
 }
 
-# Subgenre Classification Rules
+# Subgenre Classification Rules (Refined Clusters)
 SUBGENRE_MAP = {
     "paranormal_horror":    {"genres": ["Horror"], "keywords": ["ghost", "demonic", "poltergeist", "apparition", "haunting", "haunted house"]},
-    "slasher_horror":       {"genres": ["Horror"], "keywords": ["slasher", "serial killer", "masked killer"]},
-    "space_sci_fi":         {"genres": ["Science Fiction"], "keywords": ["space", "spaceship", "astronaut", "nebula", "wormhole", "space travel"]},
-    "ai_sci_fi":            {"genres": ["Science Fiction"], "keywords": ["artificial intelligence", "robot", "android", "machine"]},
-    "animal_drama":         {"genres": ["Family"], "keywords": ["dog", "cat", "horse", "animal", "human animal relationship"]},
-    "noir_thriller":        {"genres": ["Thriller", "Crime"], "keywords": ["noir", "black and white", "investigation"]}
+    "slasher_horror":       {"genres": ["Horror"], "keywords": ["slasher", "serial killer", "killer"]},
+    "space_sci_fi":         {"genres": ["Science Fiction"], "keywords": ["space", "spaceship", "astronaut", "nebula", "wormhole", "planets"]},
+    "ai_sci_fi":            {"genres": ["Science Fiction"], "keywords": ["artificial intelligence", "robot", "android", "cyborg"]},
+    "epic_fantasy":         {"genres": ["Fantasy", "Adventure"], "keywords": ["magic", "wizard", "wand", "dragon", "quest"]},
+    "noir_thriller":        {"genres": ["Thriller", "Crime"], "keywords": ["noir", "gritty", "underworld", "detective", "investigation"]}
 }
 
 import re
