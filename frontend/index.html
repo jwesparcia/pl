@@ -32,7 +32,7 @@
         <span class="logo-text">MovieMind</span>
       </div>
       <h1>Movie Recommendations</h1>
-      <p class="hero-sub">Content-based similarity engine — trained on real MovieLens data.</p>
+      <p class="hero-sub">Content-based similarity engine — powered by the TMDB dataset.</p>
     </div>
   </header>
 
@@ -43,13 +43,10 @@
     <section class="search-panel" id="search-section">
       <div class="panel-inner">
 
-        <!-- Mode toggle tabs -->
-        <div class="mode-tabs" id="mode-tabs">
+        <!-- Mode toggle hidden as User functionality is dropped for TMDB -->
+        <div class="mode-tabs" id="mode-tabs" style="display: none;">
           <button class="mode-tab active" data-mode="movie" id="tab-movie">
             <span class="tab-icon"></span> Pick a Movie
-          </button>
-          <button class="mode-tab" data-mode="user" id="tab-user">
-            <span class="tab-icon"></span> User ID
           </button>
         </div>
         
@@ -70,22 +67,24 @@
             <!-- Autocomplete dropdown -->
             <ul class="autocomplete-list" id="autocomplete-list" hidden></ul>
           </div>
-        </div>
-
-        <!-- Mode 2: User ID input (existing users) -->
-        <div class="input-group mode-panel" id="panel-user">
-          <label for="user-id-input" class="input-label">
-            <span class="label-icon"></span> User ID
-            <span class="label-hint">(try 1 – 610)</span>
-          </label>
-          <div class="input-row">
-            <input type="number" id="user-id-input" class="text-input" placeholder="e.g. 42" min="1" max="610" value="1"
-              aria-label="Enter your user ID" />
-            <button id="recommend-btn" class="btn-primary" aria-label="Get movie recommendations">
-              <span class="btn-text">Get Recommendations</span>
-            </button>
+          
+          <!-- New: Mode Selector -->
+          <div class="mode-selector">
+            <span class="mode-label">Recommendation Mode:</span>
+            <div class="mode-options">
+               <label class="mode-option">
+                 <input type="radio" name="reco-mode" value="story" checked />
+                 <span class="mode-box">Story</span>
+               </label>
+               <label class="mode-option">
+                 <input type="radio" name="reco-mode" value="director" />
+                 <span class="mode-box">Director</span>
+               </label>
+            </div>
           </div>
         </div>
+
+
 
 
       </div>

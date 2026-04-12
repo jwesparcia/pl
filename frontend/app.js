@@ -22,6 +22,8 @@ const BROWSE_PAGE_SIZE = 20;               // Movies shown per "Load more"
 let allMovies       = [];   // All movies from /movies
 let filteredMovies  = [];   // After search text filter
 let browseOffset    = 0;    // Pagination cursor for browse grid
+let likedIds        = new Set(); // User's liked movies
+let seenIds         = new Set(); // User's seen movies
 
 // --- Poster Batching Manager ---
 const PosterBatchManager = {
@@ -173,8 +175,8 @@ function switchMode(mode) {
   }
 }
 
-tabMovie.addEventListener("click", () => switchMode("movie"));
-tabUser.addEventListener("click", () => switchMode("user"));
+tabMovie?.addEventListener("click", () => switchMode("movie"));
+tabUser?.addEventListener("click", () => switchMode("user"));
 
 /* ═══════════════════════════════════════════════════════════
    AUTOCOMPLETE (movie title search)
@@ -292,11 +294,18 @@ async function getRecommendationsByMovie(title) {
   becauseBanner.hidden = true;
 
   try {
+    const mode = document.querySelector('input[name="reco-mode"]:checked')?.value || 'default';
+    
     const res = await fetch(`${API_BASE}/recommend-by-movie`, {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
       body:    JSON.stringify({ 
-        movie_title: title
+        movie_title: title,
+        user_context: {
+          mode: mode,
+          liked_ids: Array.from(likedIds),
+          seen_ids: Array.from(seenIds)
+        }
        }),
     });
 
@@ -521,6 +530,25 @@ function createMovieCard(movie, predictedRating, index) {
   card.appendChild(posterWrapper);
   card.appendChild(body);
 
+  // 3. Like Button
+  const likeBtn = document.createElement("button");
+  likeBtn.className = "card-like-btn";
+  likeBtn.innerHTML = "❤";
+  likeBtn.title = "Mark as liked to personalize results";
+  if (likedIds.has(id)) likeBtn.classList.add("liked");
+  
+  likeBtn.onclick = (e) => {
+    e.stopPropagation();
+    if (likedIds.has(id)) {
+      likedIds.delete(id);
+      likeBtn.classList.remove("liked");
+    } else {
+      likedIds.add(id);
+      likeBtn.classList.add("liked");
+    }
+  };
+  card.appendChild(likeBtn);
+
   const openModal = () => showModal(movie, predictedRating);
   card.addEventListener("click", openModal);
   card.addEventListener("keydown", e => { if (e.key === "Enter") openModal(); });
@@ -663,7 +691,7 @@ function setStatus(msg, type = "info") {
 /** Toggle loading state (spinner + button disabled). */
 function setLoading(on) {
   spinner.hidden      = !on;
-  recommendBtn.disabled = on;
+  if (recommendBtn) recommendBtn.disabled = on;
   if (!on && spinner.hidden) {
     // no-op, spinner already hidden
   }
@@ -672,12 +700,12 @@ function setLoading(on) {
 /* ═══════════════════════════════════════════════════════════
    EVENT LISTENERS
 ═══════════════════════════════════════════════════════════ */
-recommendBtn.addEventListener("click", getRecommendations);
+if (recommendBtn) recommendBtn.addEventListener("click", getRecommendations);
 recommendMovieBtn.addEventListener("click", () => {
   getRecommendationsByMovie(movieTitleInput.value);
 });
 
-userInput.addEventListener("keydown", e => {
+if (userInput) userInput.addEventListener("keydown", e => {
   if (e.key === "Enter") getRecommendations();
 });
 

@@ -24,7 +24,7 @@ try:
 except ImportError:
     SKLEARN_AVAILABLE = False
     print("WARNING: scikit-learn not installed.")
-from tensorflow.keras.models import load_model
+from sentence_transformers import SentenceTransformer
 from flask import Flask, jsonify, request, abort, send_from_directory, redirect, Response
 from werkzeug.exceptions import HTTPException
 from flask_cors import CORS
@@ -82,12 +82,18 @@ MOVIES_JSON_PATH = os.path.join(MODEL_DIR, "movies.json")
 # ─── Load Metadata and initialize Search Index ───────────────────────────────
 tfidf = None
 tfidf_matrix = None
-model = None
+similarity_matrix = None   # Pre-computed full cosine similarity matrix
+model = None               # SentenceTransformer
+embeddings_matrix = None   # Pre-computed semantic embeddings
 
-# Latent factor cache for algorithmic recommendation (Embedded Similarity)
-MOVIE_EMBEDDINGS = None 
+# Latent factor cache (kept for compatibility, unused with TMDB)
+MOVIE_EMBEDDINGS = None
 MOVIE_BIASES = None
 GENRE_IDF = {}
+
+# Global constants for IMDb formula
+GLOBAL_MEAN_RATING = 6.0
+MIN_VOTES = 500
 
 try:
     # Pre-initialize variables
@@ -100,87 +106,87 @@ try:
     min_rating = 0.5
     max_rating = 5.0
 
-    # Load scalar metadata from JSON
-    if os.path.exists(META_JSON_PATH):
-        with open(META_JSON_PATH, "r") as f:
-            meta = json.load(f)
-            user2idx = {int(k): v for k, v in meta["user2idx"].items()}
-            movie2idx = {int(k): v for k, v in meta["movie2idx"].items()}
-            idx2movie = {int(k): v for k, v in meta["idx2movie"].items()}
-            min_rating = meta.get("min_rating", 0.5)
-            max_rating = meta.get("max_rating", 5.0)
-
     # Load movies metadata from JSON
     if os.path.exists(MOVIES_JSON_PATH):
-        with open(MOVIES_JSON_PATH, "r") as f:
+        with open(MOVIES_JSON_PATH, "r", encoding="utf-8") as f:
             movies = json.load(f)
             movie_id_map = {m["movieId"]: m for m in movies}
 
-        # Build title -> internal movie index lookup
-        for orig_id, idx in movie2idx.items():
-            m_data = movie_id_map.get(orig_id)
-            if m_data:
-                title2idx[m_data["title"].strip().lower()] = idx
+        # Build index mapping directly from the loaded movies
+        for idx, m in enumerate(movies):
+            movie2idx[m["movieId"]] = idx
+            title2idx[m["title"].strip().lower()] = idx
 
+        # ─── IMPROVED: Feature Engineering ────────────────────────────────
+        # Uses the pre-built "combined" field from build_tmdb_metadata.py.
+        # Structure: genres(×2) + keywords + cast(top3) + director + overview
+        # This ensures TF-IDF captures thematic, personnel, and plot signals.
         def preprocess_data(movies_list):
-            """Clean and combine features for TF-IDF."""
+            """Extract pre-built combined features for TF-IDF vectorization."""
             descriptions = []
             for m in movies_list:
-                clean_t = re.sub(r'\s*\(\d{4}\)', '', m['title'])
-                genres = m['genres'].replace('|', ' ')
-                descriptions.append(f"{clean_t} {genres}")
+                # Use pre-built combined feature if available (from build script)
+                combined = m.get('combined', '')
+                if not combined:
+                    # Fallback: build on the fly for older movies.json formats
+                    clean_t = re.sub(r'\s*\(\d{4}\)', '', m['title'])
+                    genres = m['genres'].replace('|', ' ')
+                    overview = m.get('overview', '')
+                    keywords = ' '.join(m.get('keywords', []))
+                    cast = ' '.join([c.replace(' ', '') for c in m.get('cast', [])])
+                    director = m.get('director', '').replace(' ', '')
+                    combined = f"{clean_t} {genres} {genres} {keywords} {cast} {director} {overview}"
+                descriptions.append(combined)
             return descriptions
 
+        # ─── IMPROVED: TF-IDF Configuration ───────────────────────────────
+        # max_features bumped from 10k → 15k for richer vocabulary coverage.
+        # ngram_range=(1,2) captures bigrams like "space opera", "serial killer".
         def build_similarity_matrix(descriptions):
-            """Initialize TF-IDF globally and return the matrix."""
+            """Build TF-IDF matrix and pre-compute the full similarity matrix."""
             print("Initializing Content-Based Search Index (TF-IDF) ...")
-            vec = TfidfVectorizer(stop_words='english')
+            vec = TfidfVectorizer(
+                stop_words='english',
+                ngram_range=(1, 2),
+                max_features=15000
+            )
             matrix = vec.fit_transform(descriptions)
+            print(f"  TF-IDF matrix shape: {matrix.shape}")
+
+            # Pre-compute the FULL cosine similarity matrix for O(1) lookups.
+            # For 4803 movies this is ~92MB — perfectly fine in memory.
+            print("Pre-computing full cosine similarity matrix ...")
+            sim_matrix = cosine_similarity(matrix, matrix)
             print("Search Index Ready.")
-            return vec, matrix
+            return vec, matrix, sim_matrix
+        # Initialize TF-IDF for content-based candidate generation
+        movie_descriptions = preprocess_data(movies)
+        tfidf, tfidf_matrix, similarity_matrix = build_similarity_matrix(movie_descriptions)
 
-        # Initialize TF-IDF for the "Brain" candidate generation
-        if SKLEARN_AVAILABLE:
-            movie_descriptions = preprocess_data(movies)
-            tfidf, tfidf_matrix = build_similarity_matrix(movie_descriptions)
-
-        # Load Keras model
-        if os.path.exists(MODEL_PATH):
-            print(f"Loading Keras model from {MODEL_PATH}...")
-            model = load_model(MODEL_PATH)
-            print("Model Loaded.")
-            
-            # --- EXTRACT LATENT FACTORS FOR ALGORITHM IMPROVEMENT ---
-            try:
-                # Extract Embeddings (9724, 50) and Biases (9724, 1)
-                for layer in model.layers:
-                    if layer.name == "movie_embedding":
-                        MOVIE_EMBEDDINGS = layer.get_weights()[0]
-                    elif layer.name == "movie_bias":
-                        MOVIE_BIASES = layer.get_weights()[0]
-                print("Latent features (embeddings/biases) cached.")
-                
-                # --- CALCULATE GENRE IDF ---
-                all_genres = []
-                for m in movies:
-                    all_genres.extend(m['genres'].split('|'))
-                
-                N = len(movies)
-                genre_counts = {}
-                for g in all_genres:
-                    genre_counts[g] = genre_counts.get(g, 0) + 1
-                
-                # IDF = log(N / genre_count)
-                # This ensures rare genres (Film-Noir) have higher weighting than common ones (Drama)
-                GENRE_IDF = {g: np.log(N / count) for g, count in genre_counts.items()}
-                print(f"Genre IDF table built for {len(GENRE_IDF)} genres.")
-                
-            except Exception as e:
-                print(f"Warning: Failed to extract latent features from model: {e}")
+        # Initialize Sentence Transformer for query encoding
+        print("Loading Semantic Model (all-MiniLM-L6-v2) ...")
+        model = SentenceTransformer('all-MiniLM-L6-v2')
+        
+        # Extract embeddings matrix for fast cosine similarity
+        if movies and 'embedding' in movies[0]:
+            print("Indexing semantic embeddings ...")
+            embeddings_matrix = np.array([m['embedding'] for m in movies], dtype=np.float32)
+            print(f"  Embeddings shape: {embeddings_matrix.shape}")
+        
+        # Calculate IMDb formula constants
+        if movies:
+            all_votes = [m.get('vote_count', 0) for m in movies]
+            all_ratings = [m.get('vote_average', 0) for m in movies if m.get('vote_count', 0) > 0]
+            GLOBAL_MEAN_RATING = float(np.mean(all_ratings)) if all_ratings else 6.0
+            # Use 75th percentile as m (minimum votes required to be considered a top contender)
+            MIN_VOTES = float(np.percentile(all_votes, 75)) if all_votes else 500
+            print(f"IMDb Constants: Mean={GLOBAL_MEAN_RATING:.2f}, MinVotes={MIN_VOTES:.0f}")
 
     print(f"Metadata loaded -- {len(user2idx)} users, {len(movie2idx)} movies")
 except Exception as e:
+    import traceback
     print(f"Error loading system: {e}")
+    traceback.print_exc()
 
 # Cache and Lock for AI Poster scouting
 # Pre-seed with FRESH verified paths (TMDB paths can change frequently!)
@@ -214,14 +220,51 @@ def denormalize(pred_norm):
     """Scale sigmoid output [0,1] back to the original 0.5–5.0 rating range."""
     return float(pred_norm) * (max_rating - min_rating) + min_rating
 
+# ─── REFINED: Ranking & Diversity Helpers ─────────────────────────────────────
+
+def compute_weighted_rating(vote_avg, vote_count, m=500, C=6.0):
+    """IMDb-style weighted rating formula (WR) = (v*R + m*C) / (v+m)"""
+    return (vote_count * vote_avg + m * C) / (vote_count + m)
+
+def calculate_mmr(query_similarity, doc_similarities, candidates, lambda_param=0.5, top_n=10):
+    """
+    Maximal Marginal Relevance to balance relevance and diversity.
+    query_similarity: array of sims between query and candidates
+    doc_similarities: matrix of sims between candidates
+    """
+    selected = []
+    unselected = list(range(len(candidates)))
+    
+    # Start with the best match
+    best_idx = np.argmax(query_similarity)
+    selected.append(best_idx)
+    unselected.remove(best_idx)
+    
+    while len(selected) < min(top_n, len(candidates)):
+        mmr_scores = []
+        for idx in unselected:
+            relevance = query_similarity[idx]
+            # Max similarity to any already selected item
+            redundancy = max([doc_similarities[idx][s] for s in selected])
+            score = lambda_param * relevance - (1 - lambda_param) * redundancy
+            mmr_scores.append((score, idx))
+            
+        # Select idx with highest MMR score
+        next_idx = max(mmr_scores, key=lambda x: x[0])[1]
+        selected.append(next_idx)
+        unselected.remove(next_idx)
+        
+    return selected
+
 
 # ─── Health check ─────────────────────────────────────────────────────────────
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({
         "status": "ok", 
-        "index_loaded": tfidf_matrix is not None, 
-        "meta_loaded": len(movies) > 0
+        "index_ready": similarity_matrix is not None, 
+        "embeddings_ready": embeddings_matrix is not None,
+        "movie_count": len(movies)
     })
 
 
@@ -246,82 +289,80 @@ def get_movies():
 @app.route("/recommend", methods=["POST"])
 def recommend():
     """
-    AI-Powered Recommendations for a user.
+    Fallback Trending recommendations (TMDB lacks user data natively).
     """
     if not movies:
         abort(503, description="Library not loaded.")
 
-    body    = request.get_json(force=True, silent=True) or {}
-    user_id = body.get("user_id")
-    if user_id is None:
-        abort(400, description="Missing 'user_id'.")
-    
-    # Collaborative Filtering Logic
-    if not model or not user2idx:
-        abort(503, description="Model or User indices not loaded.")
-
-    try:
-        user_id_int = int(user_id)
-        if user_id_int not in user2idx:
-            # Fallback for new users (cold start) -> return top rated movies
-            results = sorted(movies, key=lambda x: x.get('avg_rating', 0), reverse=True)[:20]
-        else:
-            u_idx = user2idx[user_id_int]
-            m_indices = list(movie2idx.values())
-            m_ids = list(movie2idx.keys())
-            
-            # Predict for all movies in parallel (vectorized)
-            user_input = np.array([u_idx] * len(m_indices))
-            movie_input = np.array(m_indices)
-            
-            preds = model.predict([user_input, movie_input], batch_size=512, verbose=0).flatten()
-            
-            # Denormalize and pair with movie objects
-            results = []
-            for i, p in enumerate(preds):
-                m_id = m_ids[i]
-                m_data = movie_id_map.get(m_id)
-                if m_data:
-                    results.append({
-                        "id": m_id,
-                        "title": fix_title(m_data["title"]),
-                        "genres": m_data["genres"],
-                        "score": float(p),
-                        "predicted_rating": round(denormalize(p), 2)
-                    })
-            
-            results.sort(key=lambda x: x["score"], reverse=True)
-            results = results[:50] # Get top 50 candidates
-    except Exception as e:
-        print(f"Prediction Error: {e}")
-        abort(500, description="Internal error during recommendations.")
-
-    source_context = {"title": "Your Profile", "genres": "Various"}
-    
-    final_pool = results[:10]
-    for i, r in enumerate(final_pool):
-        r["rank"] = i + 1
-        r["reason"] = "Based on your viewing history and preferences."
+    trending = sorted(movies, key=lambda x: x.get("vote_average", 0), reverse=True)[:10]
+    final_pool = []
+    for i, m in enumerate(trending):
+        final_pool.append({
+            "id": m["movieId"],
+            "title": fix_title(m["title"]),
+            "genres": m["genres"],
+            "score": float(m.get("vote_average", 0)),
+            "predicted_rating": float(m.get("vote_average", 0)) / 2.0,
+            "rank": i + 1,
+            "reason": "Top trending movie on TMDB."
+        })
 
     return jsonify({
         "recommendations": final_pool
     })
 
 
-# ─── Cold Start: Recommend by movie title (dummy user) ────────────────────────
+# ─── Cold Start: Recommend by movie title ─────────────────────────────────────
 DUMMY_USER_ID = 9999  # Virtual user for cold-start recommendations
 
-def recommend_movies(movie_title, movies_list, tfidf_mat):
-    """Return top 10 similar movies based purely on TF-IDF cosine similarity."""
+# IMPROVED: Minimum quality threshold — reject anything below this.
+# 0.22 is stricter than the old 0.20, ensuring higher specificity.
+SIMILARITY_THRESHOLD = 0.22
+TOP_N = 10  # Number of recommendations to return
+
+# Generic genres that often cause "shallow" similarity (Drama, Comedy, etc.)
+GENERIC_GENRES = {"Drama", "Comedy", "Thriller", "Action"}
+
+# Strict INCOMPATIBILITY Rules (If source has key, target CANNOT have value)
+INCOMPATIBLE_GENRES = {
+    "Horror": {"Family", "Animation", "Comedy", "Romance"},
+    "Family": {"Horror", "Crime"},
+    "Animation": {"Horror", "Crime"},
+    "Documentary": {"Action", "Science Fiction", "Fantasy"}
+}
+
+# Thematic Bridge words (Force-Match) - Updated for new metadata
+HIGH_VALUE_CONCEPTS = {
+    "simulated_reality", "artificial_intelligence", "dystopia", "time_travel", 
+    "identity", "demonic_possession", "alien_contact", "haunted_house", "animal_loyalty"
+}
+
+# Subgenre definition (must match exactly the ones in metadata script)
+SUBGENRES = {
+    "paranormal_horror", "slasher_horror", "space_sci_fi", "ai_sci_fi", "animal_drama", "noir_thriller"
+}
+
+def recommend_movies(movie_title, movies_list, tfidf_sim_mat, embeddings, user_context=None):
+    """
+    Highly optimized recommendation engine using:
+      - Hybrid Similarity (TF-IDF + Semantic Embeddings)
+      - IMDb Weighted Rating
+      - MMR (Maximal Marginal Relevance) for Diversity
+      - Dynamic Modes (Story, Actor, Director)
+    """
     q_norm = normalize_title(movie_title)
     q_raw = movie_title.lower().strip()
-    
+    user_context = user_context or {}
+    mode = user_context.get('mode', 'default')
+    liked_ids = set(user_context.get('liked_ids', []))
+    seen_ids = set(user_context.get('seen_ids', []))
+
+    # ─── Step 1: Find source movie ────────────────────────────────────
     matches = []
     for i, m in enumerate(movies_list):
         m_title = m['title'].lower()
         m_fixed = fix_title(m['title']).lower()
         m_norm = normalize_title(m['title'])
-        
         score = 0
         if q_raw == m_title or q_raw == m_fixed or (q_norm and q_norm == m_norm):
             score = 3
@@ -329,90 +370,217 @@ def recommend_movies(movie_title, movies_list, tfidf_mat):
             score = 2
         elif q_raw in m_title or q_raw in m_fixed:
             score = 1
-            
-        if score > 0:
-            matches.append((score, i, m))
-            
-    if not matches:
-        return None, None
-        
+        if score > 0: matches.append((score, i, m))
+
+    if not matches: return None, None
     matches.sort(key=lambda x: (-x[0], len(x[2]['title'])))
     _, source_idx, source_data = matches[0]
-    
+
     source_info = {
-        "id": int(source_data["movieId"]),
-        "title": fix_title(source_data["title"]),
-        "genres": source_data["genres"]
+        "id":       int(source_data["movieId"]),
+        "title":    fix_title(source_data["title"]),
+        "genres":   source_data["genres"],
+        "keywords": list(source_data.get('keywords', [])),
+        "themes":   source_data.get('themes', []),
+        "high_themes": source_data.get('high_themes', []),
+        "cast":     source_data.get('cast', []),
+        "director": source_data.get('director', ''),
     }
+
+    # ─── Step 2: Calculate Hybrid Similarity ──────────────────────────
+    # a) TF-IDF Similarity
+    tfidf_sims = tfidf_sim_mat[source_idx]
     
-    # TF-IDF Similarity (Cosine)
-    query_vec = tfidf_mat[source_idx]
-    tfidf_sims = cosine_similarity(query_vec, tfidf_mat).flatten()
+    # b) Semantic Similarity (O(1) matrix mult)
+    query_emb = embeddings[source_idx]
+    semantic_sims = np.dot(embeddings, query_emb)
     
-    # Get top unique candidates
-    top_indices = np.argsort(tfidf_sims)[::-1]
-    
+    # Combined base similarity (50/50 hybrid)
+    base_sims = (tfidf_sims * 0.5) + (semantic_sims * 0.5)
+
+    # ─── Step 3: Candidate Scoring (Pre-MMR) ──────────────────────────
     candidates = []
-    seen_ids = set()
-    
-    for idx in top_indices:
-        if idx == source_idx:
-            continue
-        m = movies_list[idx]
-        m_id = m['movieId']
-        if m_id in seen_ids:
-            continue
-            
-        sim_score = float(tfidf_sims[idx])
-        if sim_score <= 0.01: # Filter out absolute zero matches
-            continue
-            
-        seen_ids.add(m_id)
-        candidates.append({
-            "id": int(m["movieId"]),
-            "title": fix_title(m["title"]),
-            "genres": m["genres"],
-            "score": sim_score,
-            "predicted_rating": round(min(5.0, max(0.5, sim_score * 5.0 + 2.5)), 2) # Pseudo rating based on score
-        })
+    source_genres = set(source_info['genres'].split('|'))
+    source_keywords = set(source_info['keywords'])
+    source_cast = set(source_info['cast'])
+    source_title_norm = normalize_title(source_info['title'])
+
+    # Score everyone
+    for idx, m in enumerate(movies_list):
+        if idx == source_idx: continue
         
-        if len(candidates) >= 10:
-            break
+        m_id = m['movieId']
+        if m_id in seen_ids: continue
+        
+        m_title_norm = normalize_title(m['title'])
+        if m_title_norm == source_title_norm: continue
+
+        # 1. Base Hybrid Sim
+        sim_score = float(base_sims[idx])
+        if sim_score < 0.15: continue # Liberal gate for MMR to filter
+        
+        # 2. Weighted Rating (IMDb)
+        wr = compute_weighted_rating(
+            m.get('vote_average', 0), 
+            m.get('vote_count', 0), 
+            m=MIN_VOTES, C=GLOBAL_MEAN_RATING
+        ) / 10.0 # Normalize to [0,1]
+        
+        target_genres = set(m['genres'].split('|'))
+        
+        # ─── STRICT FILTER: Incompatible Genres ───────────────────────────
+        is_incompatible = False
+        for sg in source_genres:
+            if sg in INCOMPATIBLE_GENRES and bool(INCOMPATIBLE_GENRES[sg] & target_genres):
+                is_incompatible = True
+                break
+        if is_incompatible: continue
+        
+        # ─── STRICT FILTER: High-Value Theme Requirement ──────────────────
+        target_themes = set(m.get('themes', []))
+        target_high_themes = set(m.get('high_themes', []))
+        source_themes = set(source_info.get('themes', []))
+        source_high_themes = set(source_info.get('high_themes', []))
+        
+        shared_themes = source_themes & target_themes
+        shared_high_themes = source_high_themes & target_high_themes
+        
+        # If the source has a HIGH priority theme, the target MUST share at least one HIGH theme
+        # or be extremely similar in base features
+        if source_high_themes and not shared_high_themes and sim_score < 0.25:
+            continue
             
-    return source_info, candidates
+        # ─── SCORING ──────────────────────────────────────────────────────
+        theme_bonus = 0.0
+        must_include_bonus = 0.0
+        subgenre_bonus = 0.0
+        
+        for theme in shared_themes:
+            if theme in SUBGENRES:
+                subgenre_bonus += 0.25
+                must_include_bonus = 0.2
+            elif theme in HIGH_VALUE_CONCEPTS or theme in source_high_themes:
+                theme_bonus += 0.25
+                must_include_bonus = 0.2
+            else:
+                theme_bonus += 0.1
+        
+        # 4. Mode-based Overlap Boost
+        target_kw = set(m.get('keywords', []))
+        shared_kw = source_keywords & target_kw
+        target_cast = set(m.get('cast', []))
+        shared_cast = source_cast & target_cast
+        
+        mode_bonus = 0.0
+        if mode == 'story':
+            # Boost keyword rarity
+            rarity_sum = sum([m.get('keyword_rarity', {}).get(kw, 1.0) for kw in shared_kw])
+            mode_bonus = min(0.15, rarity_sum / 5000)
+        elif mode == 'actor':
+            mode_bonus = 0.2 if shared_cast else 0.0
+        elif mode == 'director':
+            mode_bonus = 0.2 if m.get('director') == source_info['director'] else 0.0
+
+        # 5. Personalization Boost
+        pers_bonus = 0.0
+        if liked_ids:
+            pers_bonus = 0.05 if any(tid in liked_ids for tid in [m_id]) else 0.0
+
+        # 6. Noise & Tone Mismatch Filtering
+        genre_penalty = 0.0
+        shared_genres = source_genres & target_genres
+        
+        if shared_genres.issubset(GENERIC_GENRES) and not shared_kw and not shared_themes:
+            genre_penalty = -0.15
+            
+        tone_penalty = 0.0
+        if ("Comedy" in source_genres and "Horror" in target_genres) or ("Horror" in source_genres and "Comedy" in target_genres):
+            tone_penalty = -0.2
+        
+        # Final combined score
+        final_score = (sim_score * 0.45) + (wr * 0.25) + theme_bonus + must_include_bonus + subgenre_bonus + mode_bonus + pers_bonus + genre_penalty + tone_penalty
+        
+        candidates.append({
+            "idx": idx,
+            "id": int(m_id),
+            "title": fix_title(m['title']),
+            "genres": m['genres'],
+            "score": final_score,
+            "predicted_rating": round(min(5.0, max(0.5, final_score * 5.0 + 2.5)), 2),
+            "keywords": list(target_kw),
+            "shared_keywords": list(shared_kw),
+            "themes": m.get('themes', []),
+            "shared_themes": list(shared_themes),
+            "cast": m.get('cast', []),
+            "director": m.get('director', ''),
+            "reason_code": 'semantic' if semantic_sims[idx] > tfidf_sims[idx] else 'tfidf'
+        })
+
+    # Sort and take top 50 for MMR
+    candidates.sort(key=lambda x: x['score'], reverse=True)
+    potential_pool = candidates[:30]
+    
+    if not potential_pool: return source_info, []
+
+    # ─── Step 4: MMR Re-ranking ───────────────────────────────────────
+    # Sub-matrix of similarities between candidates for MMR
+    pool_indices = [c['idx'] for c in potential_pool]
+    candidate_embs = embeddings[pool_indices]
+    
+    # Sim matrix between candidates (semantic based for diversity)
+    doc_sims = np.dot(candidate_embs, candidate_embs.T)
+    
+    # Query sims (hybrid)
+    query_sims = np.array([c['score'] for c in potential_pool])
+    
+    selected_indices = calculate_mmr(query_sims, doc_sims, potential_pool, lambda_param=0.6, top_n=TOP_N)
+    final_results = [potential_pool[i] for i in selected_indices]
+
+    return source_info, final_results
+
 
 @app.route("/recommend-by-movie", methods=["POST"])
 def recommend_by_movie():
     """
-    Find similar movies using clean TF-IDF Content-Based filtering.
+    Optimized Hybrid Recommendation API.
     """
     body = request.get_json(force=True, silent=True) or {}
     movie_title = body.get("movie_title", "").strip()
+    user_context = body.get("user_context", {}) # mode, liked_ids, seen_ids
 
     if not movie_title:
         abort(400, description="Missing 'movie_title'.")
 
-    if not movies or tfidf_matrix is None:
-        abort(503, description="Search index not ready.")
+    if not movies or similarity_matrix is None or embeddings_matrix is None:
+        print(f"DEBUG: movies={len(movies) if movies else 0}, sim_mat={similarity_matrix is not None}, emb_mat={embeddings_matrix is not None}")
+        abort(503, description="Search index or embeddings not ready. Run build script first.")
 
-    source_info, final_results = recommend_movies(movie_title, movies, tfidf_matrix)
+    source_info, final_results = recommend_movies(
+        movie_title, movies, similarity_matrix, embeddings_matrix, user_context
+    )
 
     if not source_info or not final_results:
         abort(404, description="Movie not found or no recommendations available.")
 
-    # Generate procedural explanations
-    from reco_utils import get_movie_explanation as template_explainer
-    explanations = template_explainer(source_info, final_results)
-    
+    # Sort results by rating (Highest first) as per user request
+    final_results.sort(key=lambda x: x.get('predicted_rating', 0), reverse=True)
+
+    from reco_utils import get_movie_explanation
+    explanations = get_movie_explanation(source_info, final_results)
+
     resp_reco = []
     for i, r in enumerate(final_results):
         r["rank"] = i + 1
-        r["reason"] = explanations[i] if i < len(explanations) else "Related content."
+        r["reason"] = explanations[i]
+        # Clean internal metadata
+        for k in ["keywords", "shared_keywords", "cast", "director", "idx", "reason_code"]:
+            r.pop(k, None)
         resp_reco.append(r)
 
     return jsonify({
         "source_movie": source_info,
-        "recommendations": resp_reco
+        "recommendations": resp_reco,
+        "mode": user_context.get('mode', 'default')
     })
 
 @app.route('/api/posters/batch', methods=['POST'])

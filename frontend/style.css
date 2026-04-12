@@ -20,8 +20,8 @@
 
   --gradient-hero:  linear-gradient(135deg, #0B0E14 0%, #131722 100%);
   --gradient-card:  linear-gradient(180deg, #1A202C 0%, #131722 100%);
-  --gradient-btn:   linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
-  --gradient-chip:  linear-gradient(135deg, #3b82f633 0%, #8b5cf633 100%);
+  --btn-primary:    var(--accent-purple);
+  --chip-active:    #3b82f633;
 
   --text-primary:   #f8fafc;
   --text-secondary: #94a3b8;
@@ -198,6 +198,50 @@ input:checked + .ai-slider:before {
   box-shadow: 0 0 8px #00d4b4aa;
 }
 
+/* Mode Selector (New) */
+.mode-selector {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+.mode-label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 12px;
+}
+.mode-options {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.mode-option {
+  cursor: pointer;
+}
+.mode-option input {
+  display: none;
+}
+.mode-box {
+  display: block;
+  padding: 8px 16px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  transition: all var(--transition);
+}
+.mode-option input:checked + .mode-box {
+  background: var(--accent-purple);
+  border-color: var(--accent-purple);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+}
+
 .mode-tab {
   display: flex;
   align-items: center;
@@ -215,7 +259,7 @@ input:checked + .ai-slider:before {
 }
 .mode-tab:hover { color: var(--text-secondary); }
 .mode-tab.active {
-  background: var(--gradient-btn);
+  background: var(--btn-primary);
   color: #fff;
   box-shadow: var(--shadow-btn);
 }
@@ -330,7 +374,7 @@ input:checked + .ai-slider:before {
   display:        flex;
   align-items:    center;
   gap:            8px;
-  background:     var(--gradient-btn);
+  background:     var(--btn-primary);
   border:         none;
   border-radius:  var(--radius-btn);
   color:          #fff;
@@ -379,7 +423,7 @@ input:checked + .ai-slider:before {
 }
 .chip:hover { background: var(--border); color: var(--text-primary); }
 .chip.active {
-  background:   var(--gradient-chip);
+  background:   var(--chip-active);
   border-color:  var(--accent-purple);
   color:          var(--text-primary);
 }
@@ -480,6 +524,36 @@ input:checked + .ai-slider:before {
   border-color: var(--border-glow);
 }
 
+.card-like-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(0,0,0,0.4);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 5;
+  transition: all var(--transition);
+  font-size: 1.1rem;
+}
+.card-like-btn:hover {
+  background: rgba(0,0,0,0.6);
+  transform: scale(1.1);
+}
+.card-like-btn.liked {
+  color: var(--accent-pink);
+  background: #fff;
+  border-color: #fff;
+  box-shadow: 0 0 15px rgba(236, 72, 153, 0.5);
+}
+
 @keyframes fadeInUp {
   from { opacity: 0; transform: translateY(16px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -487,7 +561,7 @@ input:checked + .ai-slider:before {
 
 .card-color-bar {
   height:     4px;
-  background: var(--gradient-btn);
+  background: var(--btn-primary);
 }
 
 /* Movie Poster Wrapper */
@@ -704,7 +778,7 @@ input:checked + .ai-slider:before {
 .modal-genre-banner {
   height:        6px;
   border-radius: var(--radius-chip);
-  background:   var(--gradient-btn);
+  background:   var(--btn-primary);
   margin-bottom: 20px;
 }
 .modal-title { font-size: 1.3rem; font-weight: 700; line-height: 1.3; margin-bottom: 14px; }
