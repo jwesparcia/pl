@@ -44,7 +44,8 @@ This script processes the **TMDB 5000 dataset**, extracts high-value themes, and
 cd backend
 python build_tmdb_metadata.py
 ```
-*Note: This generates `tmdb_5000_movies_metadata.pkl` which acts as our high-dimensional search index.*
+*Note: This generates `model/movies.json` which acts as our high-dimensional search index.*
+To ensure the model is ready for deployment, make sure `model/movies.json` exists before pushing to GitHub.
 
 ### Step 3 — Start the Hybrid Engine
 Launch the Flask API on the optimized port (**5005**):
@@ -58,14 +59,20 @@ Simply open `frontend/index.html` in your browser. For the best experience, use 
 
 ---
 
-## 🌐 Core Intelligence
-
-| Feature | Description |
-| :--- | :--- |
-| **Hybrid Scoring** | Combines Semantic Similarity (45%) with an IMDb-weighted quality score (25%) and keyword relevance. |
-| **Thematic Extraction** | Automatically identifies specific niches (e.g., "Dystopian", "Noir", "Time-travel"). |
-| **MMR Diversity** | Uses Maximal Marginal Relevance to ensure recommendations are varied and not just sequels. |
 | **Concept Explanations** | Generates grounded, human-like reasons for every recommendation. |
+
+---
+
+## ☁️ Deployment (Render)
+
+MovieMind is ready for one-click deployment on **Render's Free Tier**:
+
+1.  **Push to GitHub**: Ensure your `backend/requirements.txt` and `render.yaml` are committed.
+2.  **Connect Repo**: Log in to Render, click **New +**, and select **Blueprint**.
+3.  **Deploy**: Connect your GitHub repository. Render will automatically detect the `render.yaml` and configure the service.
+4.  **Scaling**: The free tier provides 512MB RAM, which is sufficient for the `all-MiniLM-L6-v2` model and ~5000 movies.
+
+*Note: Initial deployment may take 3-5 minutes as Render builds the environment and installs AI dependencies.*
 
 ---
 

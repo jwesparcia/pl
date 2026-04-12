@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: moviemind-engine
+    runtime: python
+    repo: https://github.com/jwesparcia/movie-recommendation # User's repo name
+    plan: free
+    region: singapore # Change to your preferred region (e.g., oregon, frankfurt)
+    buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
+    startCommand: "gunicorn --chdir backend app:app --timeout 600 --bind 0.0.0.0:$PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: FLASK_ENV
+        value: production

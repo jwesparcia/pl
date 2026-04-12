@@ -683,11 +683,19 @@ def serve_asset(filename):
     """Serve frontend assets if they exist, after checking all API routes."""
     return send_from_directory(FRONTEND_DIR, filename)
 
+@app.route("/health")
+def health_check():
+    """Connectivity health check for Render/Uptime services."""
+    return jsonify({"status": "healthy", "movies": len(movies)}), 200
+
 
 # ─── Run ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    print("\nFlask API ->  http://localhost:5005")
+    # In production, Render/Gunicorn will bind to 0.0.0.0:$PORT
+    # This block is only for local manual testing.
+    port = int(os.environ.get("PORT", 5005))
+    print(f"\nFlask API ->  http://localhost:{port}")
     print("    GET  /movies")
     print("    POST /recommend")
     print("    POST /recommend-by-movie  (cold start)\n")
-    app.run(host="0.0.0.0", port=5005, debug=False)
+    app.run(host="0.0.0.0", port=port, debug=False)
