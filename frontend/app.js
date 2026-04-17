@@ -288,7 +288,7 @@ async function getRecommendationsByMovie(title) {
   }
 
   setLoading(true);
-  setStatus(`🧠 Analyzing complex connections... (This takes 20-40s)`);
+  setStatus(`Analyzing complex connections... (This takes 20-40s)`);
   movieGrid.innerHTML = "";
   resultsHeader.hidden = true;
   becauseBanner.hidden = true;

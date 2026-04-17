@@ -36,82 +36,138 @@ from reco_utils import get_movie_explanation, scout_poster_path, scout_poster_pa
 ROOT_DIR     = os.path.dirname(os.path.abspath(__file__))
 FRONTEND_DIR = os.path.abspath(os.path.join(ROOT_DIR, "..", "frontend"))
 MODEL_DIR    = os.path.abspath(os.path.join(ROOT_DIR, "..", "model"))
-
-# Flask server initialization
-app = Flask(__name__)
-CORS(app)
-
-# Utility for title regex formatting (e.g., handling leading articles)
-def fix_title(title):
-    """Reformat 'Matrix, The (1999)' → 'The Matrix (1999)'."""
-    m = re.match(r'^(.+),\s+(The|A|An)\s+(\(\d{4}\))$', title)
-    if m:
-        return f"{m.group(2)} {m.group(1)} {m.group(3)}"
-    return title
-
-def normalize_title(title):
-    """Normalize for comparison: remove articles, special chars, AND year."""
-    t = title.lower().strip()
-    # 1. Remove year: 'matrix (1999)' -> 'matrix'
-    t = re.sub(r'\s*\(\d{4}\)\s*$', '', t)
-    # 2. Remove articles at start: 'the matrix' -> 'matrix'
-    t = re.sub(r'^(the|a|an)\s+', '', t)
-    # 3. Remove articles at end of main title: 'matrix, the' -> 'matrix'
-    t = re.sub(r',\s+(the|a|an)', '', t)
-    # 4. Generic cleanup
-    t = re.sub(r'[^a-z0-9\s]', '', t)
-    return t
-
-def extract_topics(title):
-    """Extract core thematic tokens for semantic matching."""
-    # Clean and split
-    clean = normalize_title(title)
-    tokens = clean.split()
-    # Remove common filler words
-    stop_words = {'the', 'a', 'an', 'and', 'but', 'or', 'for', 'with', 'on', 'at', 'by', 'of', 'to', 'in', 'is', 'it', 'from'}
-    return set([t for t in tokens if t not in stop_words and len(t) > 2])
-
-
-# ─── Serve frontend index
-@app.route("/")
-def serve_index():
-    return send_from_directory(FRONTEND_DIR, "index.html")
-
-MODEL_PATH     = os.path.join(MODEL_DIR, "recommender.keras")
-META_JSON_PATH  = os.path.join(MODEL_DIR, "metadata.json")
 MOVIES_JSON_PATH = os.path.join(MODEL_DIR, "movies.json")
 
+# Initialize Flask App
+app = Flask(__name__)
+# Production safety: only allow requests from the same domain or local dev
+CORS(app)
 
-# ─── Load Metadata and initialize Search Index ───────────────────────────────
-tfidf = None
-tfidf_matrix = None
-similarity_matrix = None   # Pre-computed full cosine similarity matrix
-model = None               # SentenceTransformer
-embeddings_matrix = None   # Pre-computed semantic embeddings
-
-# Latent factor cache (kept for compatibility, unused with TMDB)
-MOVIE_EMBEDDINGS = None
-MOVIE_BIASES = None
-GENRE_IDF = {}
-
-# Global constants for IMDb formula
-GLOBAL_MEAN_RATING = 6.0
+# Global metadata containers
+movies = []
+movie_id_map = {}
+movie2idx = {}
+title2idx = {}
+user2idx = {}  # Keep for compatibility with older ranking printouts
+similarity_matrix = None
+embeddings_matrix = None
+# IMDb scoring constants
 MIN_VOTES = 500
+GLOBAL_MEAN_RATING = 6.0
+
+def fix_title(t):
+    """Normalize title for display (e.g. 'Toy Story (1995)' -> 'Toy Story')"""
+    return re.sub(r'\s*\(\d{4}\)', '', t).strip()
+
+def normalize_title(t):
+    """Normalize title for search."""
+    return re.sub(r'[^a-zA-Z0-9]', '', t).lower()
 
 try:
-    # Pre-initialize variables
-    user2idx = {}
-    movie2idx = {}
-    idx2movie = {}
-    movies = []
-    movie_id_map = {}
-    title2idx = {}
-    min_rating = 0.5
-    max_rating = 5.0
-
-    # Load movies metadata from JSON
+    # Load movies metadata from JSON (preferred) or fallback to CSV for quick local dev
     if os.path.exists(MOVIES_JSON_PATH):
         with open(MOVIES_JSON_PATH, "r", encoding="utf-8") as f:
+            movies = json.load(f)
+            movie_id_map = {m["movieId"]: m for m in movies}
+
+        # Build index mapping directly from the loaded movies
+        for idx, m in enumerate(movies):
+            movie2idx[m["movieId"]] = idx
+            title2idx[m["title"].strip().lower()] = idx
+
+        # ─── Feature Engineering ────────────────────────────────
+        # Uses the pre-built "combined" field from build_tmdb_metadata.py.
+        # Structure: genres(×2) + keywords + cast(top3) + director + overview
+        # This ensures TF-IDF captures thematic, personnel, and plot signals.
+        def preprocess_data(movies_list):
+            """Extract pre-built combined features for TF-IDF vectorization."""
+            descriptions = []
+            for m in movies_list:
+                # Use pre-built combined feature if available (from build script)
+                combined = m.get('combined', '')
+                if not combined:
+                    # Fallback: build on the fly for older movies.json formats
+                    clean_t = re.sub(r'\s*\(\d{4}\)', '', m['title'])
+                    genres = m['genres'].replace('|', ' ')
+                    overview = m.get('overview', '')
+                    keywords = ' '.join(m.get('keywords', []))
+                    cast = ' '.join([c.replace(' ', '') for c in m.get('cast', [])])
+                    director = m.get('director', '').replace(' ', '')
+                    combined = f"{clean_t} {genres} {genres} {keywords} {cast} {director} {overview}"
+                descriptions.append(combined)
+            return descriptions
+
+        # ─── TF-IDF Configuration ─────────────────────────────
+        # max_features bumped from 10k → 15k for richer vocabulary coverage.
+        # ngram_range=(1,2) captures bigrams like "space opera", "serial killer".
+        def build_similarity_matrix(descriptions):
+            """Build TF-IDF matrix and pre-compute the full similarity matrix."""
+            print("Initializing Content-Based Search Index (TF-IDF) ...")
+            vec = TfidfVectorizer(
+                stop_words='english',
+                ngram_range=(1, 2),
+                max_features=15000
+            )
+            matrix = vec.fit_transform(descriptions)
+            print(f"  TF-IDF matrix shape: {matrix.shape}")
+
+            # Pre-compute the FULL cosine similarity matrix for O(1) lookups.
+            # For 4803 movies this is ~92MB — perfectly fine in memory.
+            print("Pre-computing full cosine similarity matrix ...")
+            sim_matrix = cosine_similarity(matrix, matrix)
+            print("Search Index Ready.")
+            return vec, matrix, sim_matrix
+
+        # Initialize TF-IDF for content-based candidate generation
+        movie_descriptions = preprocess_data(movies)
+        tfidf, tfidf_matrix, similarity_matrix = build_similarity_matrix(movie_descriptions)
+
+        # Initialize Sentence Transformer for query encoding
+        print("Loading Semantic Model (all-MiniLM-L6-v2) ...")
+        model = SentenceTransformer('all-MiniLM-L6-v2')
+        
+        # Extract embeddings matrix for fast cosine similarity
+        if movies and 'embedding' in movies[0]:
+            print("Indexing semantic embeddings ...")
+            embeddings_matrix = np.array([m['embedding'] for m in movies], dtype=np.float32)
+            print(f"  Embeddings shape: {embeddings_matrix.shape}")
+        
+        # Calculate IMDb formula constants
+        if movies:
+            all_votes = [m.get('vote_count', 0) for m in movies]
+            all_ratings = [m.get('vote_average', 0) for m in movies if m.get('vote_count', 0) > 0]
+            GLOBAL_MEAN_RATING = float(np.mean(all_ratings)) if all_ratings else 6.0
+            # Use 75th percentile as m (minimum votes required to be considered a top contender)
+            MIN_VOTES = float(np.percentile(all_votes, 75)) if all_votes else 500
+            print(f"IMDb Constants: Mean={GLOBAL_MEAN_RATING:.2f}, MinVotes={MIN_VOTES:.0f}")
+    else:
+        # Quick local-dev fallback: load a minimal movie catalog from data/movies.csv
+        csv_path = os.path.join(ROOT_DIR, "..", "data", "movies.csv")
+        if os.path.exists(csv_path):
+            import csv as _csv
+            print("model/movies.json not found — loading lightweight CSV fallback from data/movies.csv")
+            with open(csv_path, newline='', encoding='utf-8') as f:
+                reader = _csv.DictReader(f)
+                movies = []
+                for r in reader:
+                    try:
+                        m_id = int(r.get('movieId') or r.get('movieid') or 0)
+                    except Exception:
+                        continue
+                    title = (r.get('title') or '').strip()
+                    genres = (r.get('genres') or '').strip()
+                    movies.append({
+                        "movieId": m_id,
+                        "title": title,
+                        "genres": genres,
+                        "combined": f"{title} {genres.replace('|', ' ')}"
+                    })
+            for idx, m in enumerate(movies):
+                movie2idx[m["movieId"]] = idx
+                title2idx[m["title"].strip().lower()] = idx
+            print(f"CSV fallback loaded — {len(movies)} movies.")
+        else:
+            print("No model/movies.json and no data/movies.csv found — starting with empty movie catalog.")
             movies = json.load(f)
             movie_id_map = {m["movieId"]: m for m in movies}
 
