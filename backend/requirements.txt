@@ -9,3 +9,5 @@ gunicorn>=21.2.0
 whitenoise>=6.6.0
 datasets
 python-dotenv
+keras>=3.0
+torch>=2.0

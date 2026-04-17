@@ -18,6 +18,11 @@ from dotenv import load_dotenv
 # Load environment variables FIRST to apply Protobuf workaround
 load_dotenv()
 
+# Keras 3 Setup (Multi-backend)
+import os
+os.environ["KERAS_BACKEND"] = "torch"
+import keras
+
 import numpy as np
 try:
     from sklearn.feature_extraction.text import TfidfVectorizer
@@ -54,6 +59,13 @@ embeddings_matrix = None
 # IMDb scoring constants
 MIN_VOTES = 500
 GLOBAL_MEAN_RATING = 6.0
+
+# Neural Recommender (Keras) - Global state
+nn_model = None
+nn_user2idx = {}
+nn_movie2idx = {}
+min_rating = 0.5
+max_rating = 5.0
 
 def fix_title(t):
     """Normalize title for display (e.g. 'Toy Story (1995)' -> 'Toy Story')"""
@@ -140,6 +152,27 @@ try:
             # Use 75th percentile as m (minimum votes required to be considered a top contender)
             MIN_VOTES = float(np.percentile(all_votes, 75)) if all_votes else 500
             print(f"IMDb Constants: Mean={GLOBAL_MEAN_RATING:.2f}, MinVotes={MIN_VOTES:.0f}")
+
+        # ─── Neural Recommender (Keras) Initialization ──────────
+        keras_model_path = os.path.join(MODEL_DIR, "recommender.keras")
+        keras_meta_path = os.path.join(MODEL_DIR, "metadata.json")
+
+        if os.path.exists(keras_model_path) and os.path.exists(keras_meta_path):
+            print("Loading Keras Neural Recommender...")
+            try:
+                nn_model = keras.models.load_model(keras_model_path)
+                with open(keras_meta_path, 'r') as f:
+                    nn_meta = json.load(f)
+                    min_rating = nn_meta.get('min_rating', 0.5)
+                    max_rating = nn_meta.get('max_rating', 5.0)
+                    # Store mappings for inference (User and Movie indices)
+                    nn_user2idx = nn_meta.get('user2idx', {})
+                    nn_movie2idx = nn_meta.get('movie2idx', {})
+                print("Keras model loaded successfully.")
+            except Exception as nn_e:
+                print(f"Warning: Failed to load Keras model: {nn_e}")
+        else:
+            print("Keras model or metadata not found — skipping neural ranking layer.")
     else:
         # Quick local-dev fallback: load a minimal movie catalog from data/movies.csv
         csv_path = os.path.join(ROOT_DIR, "..", "data", "movies.csv")
@@ -567,8 +600,38 @@ def recommend_movies(movie_title, movies_list, tfidf_sim_mat, embeddings, user_c
             "director": m.get('director', ''),
             "reason_code": 'semantic' if semantic_sims[idx] > tfidf_sims[idx] else 'tfidf'
         })
+    # ─── Neural Re-Ranking (Keras) ────────────────────────────────────
+    if nn_model and candidates:
+        try:
+            # Use a dummy user or the first one from metadata for cold-start
+            dummy_uid = "9999"
+            if dummy_uid not in nn_user2idx:
+                dummy_uid = list(nn_user2idx.keys())[0] if nn_user2idx else "0"
+            
+            u_idx = int(nn_user2idx.get(str(dummy_uid), 0))
+            
+            # Prepare batch of movie indices
+            batch_u = np.array([u_idx] * len(candidates))
+            batch_m = []
+            for c in candidates:
+                # Map dataset movieId to Keras model's movie index
+                m_idx = nn_movie2idx.get(str(c['id']), 0)
+                batch_m.append(int(m_idx))
+            
+            # Batch prediction
+            nn_preds = nn_model.predict([batch_u, np.array(batch_m)], verbose=0)
+            
+            # Update predicted ratings and scores
+            for i, pred in enumerate(nn_preds):
+                rescaled = denormalize(pred[0])
+                candidates[i]["predicted_rating"] = round(rescaled, 2)
+                # Influence final score slightly with neural signal (10% weight)
+                candidates[i]["score"] = (candidates[i]["score"] * 0.9) + ((rescaled / 5.0) * 0.1)
+        except Exception as pred_e:
+            print(f"Warning: Neural prediction failed: {pred_e}")
 
     # Sort and take top 50 for MMR
+    TOP_N = 10 # Default top N results
     candidates.sort(key=lambda x: x['score'], reverse=True)
     potential_pool = candidates[:30]
     
