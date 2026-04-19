@@ -37,7 +37,7 @@ from werkzeug.exceptions import HTTPException
 from flask_cors import CORS
 from reco_utils import get_movie_explanation, scout_poster_path, scout_poster_paths_batch
 
-# ─── Setup ───────────────────────────────────────────────────────────────────
+# --- Setup ---
 ROOT_DIR     = os.path.dirname(os.path.abspath(__file__))
 FRONTEND_DIR = os.path.abspath(os.path.join(ROOT_DIR, "..", "frontend"))
 MODEL_DIR    = os.path.abspath(os.path.join(ROOT_DIR, "..", "model"))
@@ -87,7 +87,7 @@ try:
             movie2idx[m["movieId"]] = idx
             title2idx[m["title"].strip().lower()] = idx
 
-        # ─── Feature Engineering ────────────────────────────────
+        # --- Feature Engineering ---
         # Uses the pre-built "combined" field from build_tmdb_metadata.py.
         # Structure: genres(×2) + keywords + cast(top3) + director + overview
         # This ensures TF-IDF captures thematic, personnel, and plot signals.
@@ -109,7 +109,7 @@ try:
                 descriptions.append(combined)
             return descriptions
 
-        # ─── TF-IDF Configuration ─────────────────────────────
+        # --- TF-IDF Configuration ---
         # max_features bumped from 10k → 15k for richer vocabulary coverage.
         # ngram_range=(1,2) captures bigrams like "space opera", "serial killer".
         def build_similarity_matrix(descriptions):
@@ -153,7 +153,7 @@ try:
             MIN_VOTES = float(np.percentile(all_votes, 75)) if all_votes else 500
             print(f"IMDb Constants: Mean={GLOBAL_MEAN_RATING:.2f}, MinVotes={MIN_VOTES:.0f}")
 
-        # ─── Neural Recommender (Keras) Initialization ──────────
+        # --- Neural Recommender (Keras) Initialization ---
         keras_model_path = os.path.join(MODEL_DIR, "recommender.keras")
         keras_meta_path = os.path.join(MODEL_DIR, "metadata.json")
 
@@ -209,7 +209,7 @@ try:
             movie2idx[m["movieId"]] = idx
             title2idx[m["title"].strip().lower()] = idx
 
-        # ─── Feature Engineering ────────────────────────────────
+        # --- Feature Engineering ---
         # Uses the pre-built "combined" field from build_tmdb_metadata.py.
         # Structure: genres(×2) + keywords + cast(top3) + director + overview
         # This ensures TF-IDF captures thematic, personnel, and plot signals.
@@ -231,7 +231,7 @@ try:
                 descriptions.append(combined)
             return descriptions
 
-        # ─── TF-IDF Configuration ───────────────────────────────
+        # --- TF-IDF Configuration ---
         # max_features bumped from 10k → 15k for richer vocabulary coverage.
         # ngram_range=(1,2) captures bigrams like "space opera", "serial killer".
         def build_similarity_matrix(descriptions):
@@ -312,7 +312,7 @@ def denormalize(pred_norm):
     """Scale sigmoid output [0,1] back to the original 0.5–5.0 rating range."""
     return float(pred_norm) * (max_rating - min_rating) + min_rating
 
-# ─── REFINED: Ranking & Diversity Helpers ─────────────────────────────────────
+# --- REFINED: Ranking and Diversity Helpers ---
 
 def compute_weighted_rating(vote_avg, vote_count, m=500, C=6.0):
     """IMDb-style weighted rating formula (WR) = (v*R + m*C) / (v+m)"""
@@ -349,7 +349,7 @@ def calculate_mmr(query_similarity, doc_similarities, candidates, lambda_param=0
     return selected
 
 
-# ─── Health check ─────────────────────────────────────────────────────────────
+# --- Health check ---
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({
@@ -360,7 +360,7 @@ def health():
     })
 
 
-# ─── List all movies ──────────────────────────────────────────────────────────
+# --- List all movies ---
 @app.route("/movies", methods=["GET"])
 def get_movies():
     """Return every movie: [ {id, title, genres}, … ]"""
@@ -377,7 +377,7 @@ def get_movies():
     return jsonify(results)
 
 
-# ─── Recommend top-10 movies for a user ───────────────────────────────────────
+# --- Recommend top-10 movies for a user ---
 @app.route("/recommend", methods=["POST"])
 def recommend():
     """
@@ -404,13 +404,13 @@ def recommend():
     })
 
 
-# ─── Cold Start: Recommend by movie title ─────────────────────────────────────
+# --- Cold Start: Recommend by movie title ---
 DUMMY_USER_ID = 9999  # Virtual user for cold-start recommendations
 
 # Minimum quality threshold — reject anything below this.
-# 0.22 is stricter than the old 0.20, ensuring higher specificity.
-SIMILARITY_THRESHOLD = 0.22
-TOP_N = 10  # Number of recommendations to return
+SIMILARITY_THRESHOLD = 0.25
+MAX_RESULTS = 15
+MIN_RESULTS = 5
 
 # Generic genres that often cause "shallow" similarity (Drama, Comedy, etc.)
 GENERIC_GENRES = {"Drama", "Comedy", "Thriller", "Action"}
@@ -423,7 +423,7 @@ INCOMPATIBLE_GENRES = {
     "Documentary": {"Action", "Science Fiction", "Fantasy"}
 }
 
-# ─── Thematic Clustering ────────────────────────────────
+# --- Thematic Clustering ---
 # Must align with concepts in build_tmdb_metadata.py
 THEME_CLUSTERS = {
     "PARANORMAL":   {"paranormal_horror", "haunted_location", "demonic_possession"},
@@ -459,7 +459,7 @@ def recommend_movies(movie_title, movies_list, tfidf_sim_mat, embeddings, user_c
     liked_ids = set(user_context.get('liked_ids', []))
     seen_ids = set(user_context.get('seen_ids', []))
 
-    # ─── Step 1: Find source movie ────────────────────────────────────
+    # --- Step 1: Find source movie ---
     matches = []
     for i, m in enumerate(movies_list):
         m_title = m['title'].lower()
@@ -489,7 +489,7 @@ def recommend_movies(movie_title, movies_list, tfidf_sim_mat, embeddings, user_c
         "director": source_data.get('director', ''),
     }
 
-    # ─── Step 2: Calculate Hybrid Similarity ──────────────────────────
+    # --- Step 2: Calculate Hybrid Similarity ---
     # a) TF-IDF Similarity
     tfidf_sims = tfidf_sim_mat[source_idx]
     
@@ -497,10 +497,10 @@ def recommend_movies(movie_title, movies_list, tfidf_sim_mat, embeddings, user_c
     query_emb = embeddings[source_idx]
     semantic_sims = np.dot(embeddings, query_emb)
     
-    # Combined base similarity (50/50 hybrid)
-    base_sims = (tfidf_sims * 0.5) + (semantic_sims * 0.5)
+    # Combined base similarity (30/70 hybrid favoring "vibe")
+    base_sims = (tfidf_sims * 0.3) + (semantic_sims * 0.7)
 
-    # ─── Step 3: Candidate Scoring (Pre-MMR) ──────────────────────────
+    # --- Step 3: Candidate Scoring (Pre-MMR) ---
     candidates = []
     source_genres = set(source_info['genres'].split('|'))
     source_keywords = set(source_info['keywords'])
@@ -528,7 +528,7 @@ def recommend_movies(movie_title, movies_list, tfidf_sim_mat, embeddings, user_c
             m=MIN_VOTES, C=GLOBAL_MEAN_RATING
         ) / 10.0 # Normalize to [0,1]
         
-        # ─── Step 3: PRODUCTION UPGRADE - Hard Filtering Layer ────────────
+        # --- PRODUCTION UPGRADE - Hard Filtering Layer ---
         target_high_themes = set(m.get('high_themes', []))
         source_high_themes = set(source_info.get('high_themes', []))
         
@@ -554,7 +554,7 @@ def recommend_movies(movie_title, movies_list, tfidf_sim_mat, embeddings, user_c
                 is_incompatible = True; break
         if is_incompatible: continue
 
-        # ─── SCORING ──────────────────────────────────────────────────────
+        # --- SCORING ---
         theme_bonus = 0.0
         # Obvious Match Guarantee: Force match if 2+ high clusters share
         if len(source_clusters & target_clusters) >= 2:
@@ -600,7 +600,7 @@ def recommend_movies(movie_title, movies_list, tfidf_sim_mat, embeddings, user_c
             "director": m.get('director', ''),
             "reason_code": 'semantic' if semantic_sims[idx] > tfidf_sims[idx] else 'tfidf'
         })
-    # ─── Neural Re-Ranking (Keras) ────────────────────────────────────
+    # --- Neural Re-Ranking (Keras) ---
     if nn_model and candidates:
         try:
             # Use a dummy user or the first one from metadata for cold-start
@@ -631,13 +631,12 @@ def recommend_movies(movie_title, movies_list, tfidf_sim_mat, embeddings, user_c
             print(f"Warning: Neural prediction failed: {pred_e}")
 
     # Sort and take top 50 for MMR
-    TOP_N = 10 # Default top N results
     candidates.sort(key=lambda x: x['score'], reverse=True)
     potential_pool = candidates[:30]
     
     if not potential_pool: return source_info, []
 
-    # ─── Step 4: MMR Re-ranking ───────────────────────────────────────
+    # --- Step 4: MMR Re-ranking ---
     # Sub-matrix of similarities between candidates for MMR
     pool_indices = [c['idx'] for c in potential_pool]
     candidate_embs = embeddings[pool_indices]
@@ -648,8 +647,26 @@ def recommend_movies(movie_title, movies_list, tfidf_sim_mat, embeddings, user_c
     # Query sims (hybrid)
     query_sims = np.array([c['score'] for c in potential_pool])
     
-    selected_indices = calculate_mmr(query_sims, doc_sims, potential_pool, lambda_param=0.6, top_n=TOP_N)
-    final_results = [potential_pool[i] for i in selected_indices]
+    # MMR with high lambda (0.8) to favor relevance/vibe over diversity
+    selected_indices = calculate_mmr(query_sims, doc_sims, potential_pool, lambda_param=0.8, top_n=MAX_RESULTS)
+    all_final = [potential_pool[i] for i in selected_indices]
+
+    # --- Step 5: Dynamic Filtering ---
+    # Only keep results that are actually good matches.
+    # We want at least MIN_RESULTS but no more than MAX_RESULTS.
+    final_results = []
+    for i, res in enumerate(all_final):
+        # Quality gate: if we already have MIN_RESULTS, be stricter.
+        gate = 0.45 if len(final_results) >= MIN_RESULTS else 0.35
+        if res['score'] >= gate:
+            final_results.append(res)
+        
+        if len(final_results) >= MAX_RESULTS:
+            break
+
+    # If we still have fewer than MIN_RESULTS, take the top ones regardless of gate
+    if len(final_results) < MIN_RESULTS and all_final:
+        final_results = all_final[:MIN_RESULTS]
 
     return source_info, final_results
 
@@ -796,7 +813,7 @@ def get_poster(movie_title):
         return abort(502)
 
 
-# ─── Catch-all for assets (Style, JS, Images) ─────────────────────────────────
+# --- Catch-all for assets (Style, JS, Images) ---
 @app.route("/<path:filename>")
 def serve_asset(filename):
     """Serve frontend assets if they exist, after checking all API routes."""
@@ -808,7 +825,7 @@ def health_check():
     return jsonify({"status": "healthy", "movies": len(movies)}), 200
 
 
-# ─── Run ──────────────────────────────────────────────────────────────────────
+# --- Run ---
 if __name__ == "__main__":
     # In production, Render/Gunicorn will bind to 0.0.0.0:$PORT
     # This block is only for local manual testing.

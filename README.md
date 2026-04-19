@@ -1,98 +1,100 @@
-#  MovieMind — Hybrid Intelligent Recommendation System
+# MovieMind - Hybrid Intelligent Recommendation System
 
-MovieMind is a modern, high-intelligence movie recommendation engine that balances **Semantic Vector Search** (using MiniLM Transformers) with **Weighted Thematic Analysis** to deliver precise, diverse, and context-aware suggestions.
+MovieMind is a sophisticated movie recommendation engine that integrates Semantic Vector Search (utilizing MiniLM Transformers) with Weighted Thematic Analysis and Neural Collaborative Filtering to deliver precise and context-aware suggestions.
 
-Unlike traditional systems that only match genres, MovieMind understands the *meaning* and *themes* behind a movie (e.g., recognizing that "Artificial Intelligence" and "Cyborgs" are related).
+Unlike traditional systems that rely solely on genre matching, MovieMind analyzes the underlying thematic concepts of cinematographic works to identify deep narrative connections.
 
 ---
 
-##  Project Structure
+## Project Structure
 
 ```
 moviereco/
-├── backend/
-│   ├── app.py                   # Main Flask REST API (Hybrid Engine)
-│   ├── build_tmdb_metadata.py    # Data pipeline: extraction & vectorization
-│   ├── reco_utils.py            # Intelligent Explanation & Utility layer
-│   └── requirements.txt         # Core dependencies
-├── frontend/
-│   ├── index.html               # Premium Glassmorphism UI
-│   ├── style.css                # Dark-mode styling
-│   └── app.js                   # Frontend client logic
-├── README.md                    # You are here
-└── recommendation_logic.md      # Deep dive into the math & algorithms
+|-- backend/
+|   |-- app.py                   # Main Flask REST API (Hybrid Engine)
+|   |-- build_tmdb_metadata.py    # Data pipeline: metadata extraction and vectorization
+|   |-- train_model.py           # Neural training: Keras/Torch collaborative filtering
+|   |-- reco_utils.py            # Intelligent Explanation and Utility layer
+|   `-- requirements.txt         # System dependencies
+|-- frontend/
+|   |-- index.html               # Glassmorphism User Interface
+|   |-- style.css                # Interface styling
+|   `-- app.js                   # Frontend client logic
+|-- README.md                    # Primary documentation
+`-- recommendation_logic.md      # Detailed algorithmic overview
 ```
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
-### Step 1 — Initialize Environment
-Create a virtual environment and install the required AI and backend libraries:
+### Step 1 - Initialize Environment
+Create a virtual environment and install the required dependencies:
 
 ```bash
-# From root directory
+# From the root directory
 python -m venv venv
 .\venv\Scripts\activate
 pip install -r backend/requirements.txt
 ```
 
-### Step 2 — Build Metadata & Search Index
-This script processes the **TMDB 5000 dataset**, extracts high-value themes, and generates 384-dimensional semantic embeddings.
+### Step 2 - Generate Search Index
+Execute the metadata build script to process the TMDB 5000 dataset and generate 384-dimensional semantic embeddings.
 
 ```bash
 cd backend
 python build_tmdb_metadata.py
 ```
-*Note: This generates `model/movies.json` which acts as our high-dimensional search index.*
-To ensure the model is ready for deployment, make sure `model/movies.json` exists before pushing to GitHub.
+This process generates `model/movies.json`, which serves as the primary search index.
 
-### Step 3 — Start the Hybrid Engine
-Launch the Flask API on the optimized port (**5005**):
+### Step 3 - Train Neural Recommender
+Execute the training script to generate the Keras collaborative filtering model used for final ranking.
+
+```bash
+python train_model.py
+```
+This generates `model/recommender.keras` and the associated metadata.
+
+### Step 4 - Start the Application
+Launch the Flask API on port 5005:
 
 ```bash
 python app.py
 ```
 
-### Step 4 — Launch the UI
-Simply open `frontend/index.html` in your browser. For the best experience, use a local server like VS Code's **Live Server**.
+### Step 5 - Access the Interface
+Open `frontend/index.html` in a web browser. It is recommended to use a local development server for the best experience.
 
 ---
 
-| **Concept Explanations** | Generates grounded, human-like reasons for every recommendation. |
+## Deployment (Render)
+
+MovieMind is optimized for deployment on the Render platform:
+
+1.  **Repository Configuration**: Ensure `backend/requirements.txt` and `render.yaml` are present in the repository.
+2.  **Blueprint Connection**: Create a new Blueprint service on Render and connect the GitHub repository.
+3.  **Resource Management**: The system is configured to run efficiently within Render's free tier (512MB RAM).
 
 ---
 
-## ☁️ Deployment (Render)
+## Technical Stack
 
-MovieMind is ready for one-click deployment on **Render's Free Tier**:
-
-1.  **Push to GitHub**: Ensure your `backend/requirements.txt` and `render.yaml` are committed.
-2.  **Connect Repo**: Log in to Render, click **New +**, and select **Blueprint**.
-3.  **Deploy**: Connect your GitHub repository. Render will automatically detect the `render.yaml` and configure the service.
-4.  **Scaling**: The free tier provides 512MB RAM, which is sufficient for the `all-MiniLM-L6-v2` model and ~5000 movies.
-
-*Note: Initial deployment may take 3-5 minutes as Render builds the environment and installs AI dependencies.*
-
----
-
-## 🛠 Tech Stack
-
-| Layer | Technology |
+| Component | Technology |
 | :--- | :--- |
-| **Semantic AI** | `sentence-transformers` (all-MiniLM-L6-v2) |
-| **Data Science** | `scikit-learn`, `pandas`, `numpy` |
-| **Backend** | `Flask`, `Flask-CORS` |
-| **Frontend** | HTML5, Vanilla CSS, Vanilla JS |
+| **Neural Framework** | Keras 3 (PyTorch Backend) |
+| **Semantic Intelligence** | Sentence-Transformers (all-MiniLM-L6-v2) |
+| **Data Processing** | Scikit-learn, Pandas, NumPy |
+| **Backend API** | Flask, Flask-CORS |
+| **Frontend** | HTML5, CSS3, JavaScript |
 | **Dataset** | TMDB 5000 Movies |
 
 ---
 
-## 📋 Requirements
+## System Requirements
 
-- Python 3.10+
-- 8GB+ RAM (recommended for loading semantic models)
-- Internet connection (initial run only to download the Transformer model)
+- Python 3.14+
+- 8GB RAM recommended for optimal model loading performance.
+- Active internet connection for the initial download of Transformer weights.
 
 ---
-*Built with ❤️ as a Next-Gen Recommendation System Demonstration.*
+Developed as a demonstration of next-generation recommendation systems.

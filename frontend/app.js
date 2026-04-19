@@ -1,24 +1,24 @@
 /**
- * app.js — MovieMind Frontend Logic
+ * app.js - MovieMind Frontend Logic
  * ===========================================================
  * Connects the HTML UI to the Flask REST API.
  *
  * Flow:
- *   1. On load  → fetch all movies for browse grid + genre chips
- *   2. Mode A   → "Pick a Movie" (cold start / dummy user)
- *                  User types a title → autocomplete dropdown
- *                  Select → POST /recommend-by-movie → cards
- *   3. Mode B   → "User ID" (existing user)
- *                  Enter ID → POST /recommend → cards
- *   4. On card  → open detail modal
+ *   1. On load  -> fetch all movies for browse grid + genre chips
+ *   2. Mode A   -> "Pick a Movie" (cold start / dummy user)
+ *                  User types a title -> autocomplete dropdown
+ *                  Select -> POST /recommend-by-movie -> cards
+ *   3. Mode B   -> "User ID" (existing user)
+ *                  Enter ID -> POST /recommend -> cards
+ *   4. On card  -> open detail modal
  * ===========================================================
  */
 
-/* ── Config ─────────────────────────────────────────────── */
+/* --- Config --- */
 const API_BASE = "http://localhost:5005";  // Flask server URL (Nuclear Port Migration to 5005)
 const BROWSE_PAGE_SIZE = 20;               // Movies shown per "Load more"
 
-/* ── State ──────────────────────────────────────────────── */
+/* --- State --- */
 let allMovies       = [];   // All movies from /movies
 let filteredMovies  = [];   // After search text filter
 let browseOffset    = 0;    // Pagination cursor for browse grid
@@ -74,7 +74,7 @@ const PosterBatchManager = {
 };
 let lastRecommendations = [];
 
-/* ── DOM refs ─────────────────────────────────────────── */
+/* --- DOM refs --- */
 // Shared
 const spinner        = document.getElementById("spinner");
 const statusText     = document.getElementById("status-text");
@@ -105,9 +105,9 @@ const becauseTitle     = document.getElementById("because-title");
 const userInput      = document.getElementById("user-id-input");
 const recommendBtn   = document.getElementById("recommend-btn");
 
-/* ══════════════════════════════════════════════════════════
-   STARTUP — fetch all movies
-══════════════════════════════════════════════════════════ */
+/* ==========================================================
+   STARTUP - fetch all movies
+========================================================== */
 async function loadAllMovies() {
   try {
     const res = await fetch(`${API_BASE}/movies`);
@@ -122,7 +122,7 @@ async function loadAllMovies() {
   }
 }
 
-/* ── Search logic ──────────────────────────────── */
+/* --- Search logic --- */
 function applyFilters() {
   const query = movieSearch.value.toLowerCase().trim();
 
@@ -137,9 +137,9 @@ function applyFilters() {
   renderBrowseGrid(true);
 }
 
-/* ═══════════════════════════════════════════════════════════
-   RENDER — Browse Grid
-═══════════════════════════════════════════════════════════ */
+/* ==========================================================
+   RENDER - Browse Grid
+========================================================== */
 function renderBrowseGrid(reset = false) {
   if (reset) browseGrid.innerHTML = "";
 
@@ -155,9 +155,7 @@ function renderBrowseGrid(reset = false) {
   loadMoreBtn.hidden = browseOffset >= filteredMovies.length;
 }
 
-/* ═══════════════════════════════════════════════════════════
-   MODE TOGGLE
-═══════════════════════════════════════════════════════════ */
+/* --- MODE TOGGLE --- */
 function switchMode(mode) {
   // Toggle tabs
   tabMovie.classList.toggle("active", mode === "movie");
@@ -178,9 +176,7 @@ function switchMode(mode) {
 tabMovie?.addEventListener("click", () => switchMode("movie"));
 tabUser?.addEventListener("click", () => switchMode("user"));
 
-/* ═══════════════════════════════════════════════════════════
-   AUTOCOMPLETE (movie title search)
-═══════════════════════════════════════════════════════════ */
+/* --- AUTOCOMPLETE (movie title search) --- */
 let acHighlight = -1; // Keyboard navigation index
 
 function showAutocomplete(query) {
@@ -277,10 +273,7 @@ document.addEventListener("click", e => {
   }
 });
 
-/* ═══════════════════════════════════════════════════════════
-   COLD START: Recommend by Movie Title
-   (The "Dummy User" approach)
-═══════════════════════════════════════════════════════════ */
+/* --- COLD START: Recommend by Movie Title --- */
 async function getRecommendationsByMovie(title) {
   if (!title || !title.trim()) {
     setStatus("Please type a movie title first.", "error");
@@ -348,9 +341,7 @@ async function getRecommendationsByMovie(title) {
   }
 }
 
-/* ═══════════════════════════════════════════════════════════
-   RECOMMEND — call /recommend endpoint (User ID mode)
-═══════════════════════════════════════════════════════════ */
+/* --- RECOMMEND - call /recommend endpoint (User ID mode) --- */
 async function getRecommendations() {
   const userId = parseInt(userInput.value, 10);
   if (isNaN(userId) || userId < 1) {
@@ -410,9 +401,7 @@ async function getRecommendations() {
   }
 }
 
-/* ═══════════════════════════════════════════════════════════
-   BUILD — Movie Card element
-=══════════════════════════════════════════════════════════ */
+/* --- BUILD - Movie Card element --- */
 /**
  * createMovieCard(movie, predictedRating, index)
  *
@@ -565,9 +554,7 @@ function hashString(str) {
   return hash;
 }
 
-/* ═══════════════════════════════════════════════════════════
-   MODAL
-═══════════════════════════════════════════════════════════ */
+/* --- MODAL --- */
 function showModal(movie, predictedRating) {
   // 1. Create from template
   const clone = modalTemplate.content.cloneNode(true);
@@ -634,9 +621,7 @@ document.addEventListener("keydown", e => {
   if (e.key === "Escape") closeModal(); 
 });
 
-/* ═══════════════════════════════════════════════════════════
-   HELPERS
-═══════════════════════════════════════════════════════════ */
+/* --- HELPERS --- */
 /**
  * starsForRating — convert a 0-5 numeric rating to ★★★★☆ style string.
  * Full stars for every point, half star for 0.3–0.7 remainder.
@@ -697,9 +682,7 @@ function setLoading(on) {
   }
 }
 
-/* ═══════════════════════════════════════════════════════════
-   EVENT LISTENERS
-═══════════════════════════════════════════════════════════ */
+/* --- EVENT LISTENERS --- */
 if (recommendBtn) recommendBtn.addEventListener("click", getRecommendations);
 recommendMovieBtn.addEventListener("click", () => {
   getRecommendationsByMovie(movieTitleInput.value);
@@ -720,7 +703,7 @@ function debounce(fn, ms) {
   return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), ms); };
 }
 
-/* ── Bootstrap ──────────────────────────────────────────── */
+/* --- Bootstrap --- */
 document.addEventListener("DOMContentLoaded", () => {
   loadAllMovies();
 });

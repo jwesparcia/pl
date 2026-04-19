@@ -16,7 +16,7 @@ ds = load_dataset("AiresPucrs/tmdb-5000-movies", split="train")
 print("Initializing Sentence Transformer (all-MiniLM-L6-v2)...")
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
-# ─── High-Concept Theme Map (Prioritized Clustering) ─────────────────────────
+# --- High-Concept Theme Map (Prioritized Clustering) ---
 # Mapping cluster keywords to broader conceptual themes with importance ratings.
 THEME_BANK = {
     # HIGH Priority (Strong identifiers for Cluster-based filtering)
@@ -96,7 +96,7 @@ def extract_themes(keywords, overview, genres):
 
     return themes
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ==========================================================
 
 movies = []
 keyword_counts = {}
@@ -121,14 +121,14 @@ for row in ds:
         popularity = float(row.get('popularity', 0.0))
         release_date = str(row.get('release_date', '') or '')
 
-        # ─── 1. Parse genres ─────────────────────────────────────────────
+        # --- 1. Parse genres ---
         try:
             genres_raw = ast.literal_eval(row['genres'])
             genre_names = [g['name'] for g in genres_raw] if isinstance(genres_raw, list) else []
         except Exception:
             genre_names = []
 
-        # ─── 2. Parse keywords ───────────────────────────────────────────
+        # --- 2. Parse keywords ---
         try:
             kw_raw = ast.literal_eval(row.get('keywords', '[]'))
             keyword_names = [k['name'].lower() for k in kw_raw] if isinstance(kw_raw, list) else []
@@ -138,7 +138,7 @@ for row in ds:
         except Exception:
             keyword_names = []
 
-        # ─── 3. Parse cast → top 3 actors ───────────────────────────────
+        # --- 3. Parse cast -> top 3 actors ---
         try:
             cast_raw = ast.literal_eval(row.get('cast', '[]'))
             if isinstance(cast_raw, list):
@@ -149,7 +149,7 @@ for row in ds:
         except Exception:
             cast_names = []
 
-        # ─── 4. Parse crew → director only ──────────────────────────────
+        # --- 4. Parse crew -> director only ---
         try:
             crew_raw = ast.literal_eval(row.get('crew', '[]'))
             director = ''
@@ -161,10 +161,10 @@ for row in ds:
         except Exception:
             director = ''
 
-        # ─── 5. Extract Prioritized Themes & Subgenres ─────────────────────
+        # --- 5. Extract Prioritized Themes and Subgenres ---
         theme_data = extract_themes(keyword_names, overview, genre_names)
         
-        # ─── 6. Build "combined" feature string ─────────────────────────
+        # --- 6. Build "combined" feature string ---
         # Give subgenres and high-themes massive frequency weight
         subgenre_str = ' '.join(theme_data["HIGH"])
         genre_tokens = ' '.join(genre_names)
@@ -173,11 +173,11 @@ for row in ds:
         crew_token    = director
 
         combined = (
-            f"{subgenre_str} {subgenre_str} {subgenre_str} "       # Subgenres/High-themes ×3
-            f"{keyword_tokens} {keyword_tokens} "                  # keywords ×2
-            f"{cast_tokens} "                                     # cast ×1
-            f"{crew_token} "                                       # director ×1
-            f"{genre_tokens} "                                     # genres ×1 (base)
+            f"{subgenre_str} {subgenre_str} {subgenre_str} "       # Subgenres/High-themes x3
+            f"{keyword_tokens} {keyword_tokens} "                  # keywords x2
+            f"{cast_tokens} "                                     # cast x1
+            f"{crew_token} "                                       # director x1
+            f"{genre_tokens} "                                     # genres x1 (base)
             f"{overview}"                                          # plot overview
         ).strip()
 
@@ -231,7 +231,7 @@ for i, m in enumerate(movies):
     m['themes'] = final_themes
     m['high_themes'] = high_themes # Keep separate for strict ranking
 
-# ─── Save to model/movies.json ───────────────────────────────────────────────
+# --- Save to model/movies.json ---
 output_path = os.path.join(os.path.dirname(__file__), "..", "model", "movies.json")
 os.makedirs(os.path.dirname(output_path), exist_ok=True)
 

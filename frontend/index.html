@@ -19,9 +19,9 @@
 <body>
 
 
-  <!-- ═══════════════════════════════════════════════════
+  <!-- ==========================================================
        HEADER / HERO
-  ════════════════════════════════════════════════════ -->
+  ========================================================== -->
   <header class="hero">
     <div class="hero-bg-circles" aria-hidden="true">
       <span class="circle c1"></span>
@@ -37,9 +37,9 @@
     </div>
   </header>
 
-  <!-- ═══════════════════════════════════════════════════
+  <!-- ==========================================================
        SEARCH PANEL
-  ════════════════════════════════════════════════════ -->
+  ========================================================== -->
   <main>
     <section class="search-panel" id="search-section">
       <div class="panel-inner">
@@ -91,17 +91,17 @@
       </div>
     </section>
 
-    <!-- ═══════════════════════════════════════════════════
+    <!-- ==========================================================
          STATUS / LOADING
-    ════════════════════════════════════════════════════ -->
+    ========================================================== -->
     <div class="status-bar" id="status-bar" aria-live="polite">
       <div class="spinner" id="spinner" hidden></div>
       <p id="status-text" class="status-text">Pick a movie you love, and we'll find your next favorite.</p>
     </div>
 
-    <!-- ═══════════════════════════════════════════════════
+    <!-- ==========================================================
          RECOMMENDATIONS GRID
-    ════════════════════════════════════════════════════ -->
+    ========================================================== -->
     <section class="results-section" id="results-section" aria-label="Recommended movies">
       <div class="results-header" id="results-header" hidden>
         <div class="results-title-group">
@@ -117,9 +117,9 @@
       <div class="movie-grid" id="movie-grid"></div>
     </section>
 
-    <!-- ═══════════════════════════════════════════════════
+    <!-- ==========================================================
          ALL MOVIES (BROWSE)
-    ════════════════════════════════════════════════════ -->
+    ========================================================== -->
     <section class="browse-section" id="browse-section">
       <div class="browse-header">
         <h2>Browse All Movies</h2>
@@ -133,9 +133,9 @@
 
   </main>
 
-  <!-- ═══════════════════════════════════════════════════
-       MODAL — Movie Detail
-  ════════════════════════════════════════════════════ -->
+  <!-- ==========================================================
+       MODAL - Movie Detail
+  ========================================================== -->
   <template id="modal-template">
     <div class="modal-overlay" id="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-title">
       <div class="modal-card">
@@ -149,16 +149,15 @@
     </div>
   </template>
 
-  <!-- ═══════════════════════════════════════════════════
+  <!-- ==========================================================
        FOOTER
-  ════════════════════════════════════════════════════ -->
+  ========================================================== -->
   <footer class="site-footer">
     <p>
-      Built with <span class="heart">love</span> using
+      Built with <span class="heart">❤</span> using
       <strong>TensorFlow</strong> · <strong>Flask</strong> · <strong>Vanilla JS</strong> ·
       MovieLens Dataset
     </p>
-    <p class="footer-sub">AI-powered explanations by Google Gemini · Collaborative Filtering — School ML Project</p>
   </footer>
 
   <script src="app.js"></script>

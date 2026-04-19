@@ -7,9 +7,9 @@ poster retrieval and the generation of explainable AI (XAI) justifications.
 import random
 import re
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ==========================================================
 #  SECTION 1: IMDB Poster Scouting (unchanged)
-# ═══════════════════════════════════════════════════════════════════════════════
+# ==========================================================
 
 def _fetch_imdb_poster(movie_title):
     try:
@@ -56,9 +56,9 @@ def scout_poster_paths_batch(movie_titles):
                 results[title] = "NOT_FOUND"
     return results
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ==========================================================
 #  SECTION 2: PRODUCTION UPGRADE - Explanation System
-# ═══════════════════════════════════════════════════════════════════════════════
+# ==========================================================
 
 # Preprocessing pipeline: performs feature extraction, token cleaning, 
 # and encodes semantic embeddings for the clustering model.
