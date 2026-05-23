@@ -15,12 +15,7 @@ backend/__pycache__/
 .env
 backend/.env
 
-# AI Models & Large Assets (usually ignored due to size)
-model/*.keras
-model/*.h5
-model/*.pth
-model/*.json
-!model/README.md
+
 
 # Movie datasets (Raw CSVs)
 data/*.csv
