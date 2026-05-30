@@ -818,10 +818,32 @@ input:checked + .ai-slider:before {
   border-top:  1px solid var(--border);
   color:        var(--text-muted);
   font-size:   0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 .site-footer strong { color: var(--text-secondary); }
 .footer-sub  { margin-top: 4px; font-size: 0.78rem; }
 .heart       { color: var(--accent-pink); }
+
+.footer-contact {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.footer-email {
+  color: var(--accent-teal);
+  text-decoration: none;
+  font-weight: 600;
+  transition: color var(--transition), text-shadow var(--transition);
+}
+.footer-email:hover {
+  color: #22d3ee;
+  text-shadow: 0 0 12px rgba(6, 182, 212, 0.5);
+  text-decoration: underline;
+}
 
 /* ── 12. Error State ──────────────────────────────────────── */
 .error-box {

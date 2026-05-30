@@ -19,29 +19,29 @@ const API_BASE = "http://localhost:5005";  // Flask server URL (Nuclear Port Mig
 const BROWSE_PAGE_SIZE = 20;               // Movies shown per "Load more"
 
 /* --- State --- */
-let allMovies       = [];   // All movies from /movies
-let filteredMovies  = [];   // After search text filter
-let browseOffset    = 0;    // Pagination cursor for browse grid
-let likedIds        = new Set(); // User's liked movies
-let seenIds         = new Set(); // User's seen movies
+let allMovies = [];   // All movies from /movies
+let filteredMovies = [];   // After search text filter
+let browseOffset = 0;    // Pagination cursor for browse grid
+let likedIds = new Set(); // User's liked movies
+let seenIds = new Set(); // User's seen movies
 
 // --- Poster Batching Manager ---
 const PosterBatchManager = {
   queue: [],
   timer: null,
-  
+
   add(title, imgElement, fallbackElement) {
     this.queue.push({ title, imgElement, fallbackElement });
     if (!this.timer) {
       this.timer = setTimeout(() => this.process(), 200);
     }
   },
-  
+
   async process() {
     const currentBatch = this.queue.splice(0, 10);
     this.timer = null;
     if (currentBatch.length === 0) return;
-    
+
     const titles = currentBatch.map(item => item.title);
     try {
       const response = await fetch(`${API_BASE}/api/posters/batch`, {
@@ -50,7 +50,7 @@ const PosterBatchManager = {
         body: JSON.stringify({ titles })
       });
       const data = await response.json();
-      
+
       currentBatch.forEach(item => {
         const url = data[item.title];
         if (url && url !== "NOT_FOUND") {
@@ -65,7 +65,7 @@ const PosterBatchManager = {
       console.error("Batch poster error:", e);
       currentBatch.forEach(item => item.imgElement.onerror());
     }
-    
+
     // Continue if more in queue
     if (this.queue.length > 0) {
       this.timer = setTimeout(() => this.process(), 100);
@@ -76,34 +76,34 @@ let lastRecommendations = [];
 
 /* --- DOM refs --- */
 // Shared
-const spinner        = document.getElementById("spinner");
-const statusText     = document.getElementById("status-text");
-const movieGrid      = document.getElementById("movie-grid");
-const resultsHeader  = document.getElementById("results-header");
-const resultsTitle   = document.getElementById("results-title");
-const resultsCount   = document.getElementById("results-count");
-const browseGrid     = document.getElementById("browse-grid");
-const movieSearch    = document.getElementById("movie-search");
-const loadMoreBtn    = document.getElementById("load-more-btn");
-const modalTemplate  = document.getElementById("modal-template");
-let   activeModal    = null;
+const spinner = document.getElementById("spinner");
+const statusText = document.getElementById("status-text");
+const movieGrid = document.getElementById("movie-grid");
+const resultsHeader = document.getElementById("results-header");
+const resultsTitle = document.getElementById("results-title");
+const resultsCount = document.getElementById("results-count");
+const browseGrid = document.getElementById("browse-grid");
+const movieSearch = document.getElementById("movie-search");
+const loadMoreBtn = document.getElementById("load-more-btn");
+const modalTemplate = document.getElementById("modal-template");
+let activeModal = null;
 
 // Mode toggle
-const tabMovie       = document.getElementById("tab-movie");
-const tabUser        = document.getElementById("tab-user");
-const panelMovie     = document.getElementById("panel-movie");
-const panelUser      = document.getElementById("panel-user");
+const tabMovie = document.getElementById("tab-movie");
+const tabUser = document.getElementById("tab-user");
+const panelMovie = document.getElementById("panel-movie");
+const panelUser = document.getElementById("panel-user");
 
 // Cold start (movie mode)
-const movieTitleInput  = document.getElementById("movie-title-input");
+const movieTitleInput = document.getElementById("movie-title-input");
 const recommendMovieBtn = document.getElementById("recommend-movie-btn");
 const autocompleteList = document.getElementById("autocomplete-list");
-const becauseBanner    = document.getElementById("because-banner");
-const becauseTitle     = document.getElementById("because-title");
+const becauseBanner = document.getElementById("because-banner");
+const becauseTitle = document.getElementById("because-title");
 
 // User ID mode
-const userInput      = document.getElementById("user-id-input");
-const recommendBtn   = document.getElementById("recommend-btn");
+const userInput = document.getElementById("user-id-input");
+const recommendBtn = document.getElementById("recommend-btn");
 
 /* ==========================================================
    STARTUP - fetch all movies
@@ -112,7 +112,7 @@ async function loadAllMovies() {
   try {
     const res = await fetch(`${API_BASE}/movies`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    allMovies      = await res.json();
+    allMovies = await res.json();
     filteredMovies = [...allMovies];
     renderBrowseGrid(true);
 
@@ -288,23 +288,26 @@ async function getRecommendationsByMovie(title) {
 
   try {
     const mode = document.querySelector('input[name="reco-mode"]:checked')?.value || 'default';
-    
+
     const res = await fetch(`${API_BASE}/recommend-by-movie`, {
-      method:  "POST",
+      method: "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ 
+      body: JSON.stringify({
         movie_title: title,
         user_context: {
           mode: mode,
           liked_ids: Array.from(likedIds),
           seen_ids: Array.from(seenIds)
         }
-       }),
+      }),
     });
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.description || `HTTP ${res.status}`);
+      if (res.status === 404) {
+        throw new Error(`"${title}" wasn't found in our dataset. Try a different title or check your spelling!`);
+      }
+      throw new Error(err.description || `Something went wrong (HTTP ${res.status}).`);
     }
 
     const data = await res.json();
@@ -357,9 +360,9 @@ async function getRecommendations() {
 
   try {
     const res = await fetch(`${API_BASE}/recommend`, {
-      method:  "POST",
+      method: "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ 
+      body: JSON.stringify({
         user_id: userId
       }),
     });
@@ -413,7 +416,7 @@ function createMovieCard(movie, predictedRating, index) {
   const { id, title, genres, reason, rank } = movie;
   const card = document.createElement("article");
   card.className = "movie-card";
-  card.tabIndex  = 0;
+  card.tabIndex = 0;
   card.setAttribute("aria-label", title);
 
   // 1. Poster Wrapper
@@ -434,7 +437,7 @@ function createMovieCard(movie, predictedRating, index) {
     "War": "", "Western": "", "default": ""
   };
   const icon = genresMap[primaryGenre] || genresMap["default"];
-  
+
   const grads = [
     "#5c6e58",
     "#4a5e4b",
@@ -455,7 +458,7 @@ function createMovieCard(movie, predictedRating, index) {
   img.alt = title;
   img.loading = "lazy";
   img.style.opacity = "0"; // Fade in on load
-  
+
   img.onload = () => {
     img.style.opacity = "1";
     fallback.style.display = "none";
@@ -525,7 +528,7 @@ function createMovieCard(movie, predictedRating, index) {
   likeBtn.innerHTML = "❤";
   likeBtn.title = "Mark as liked to personalize results";
   if (likedIds.has(id)) likeBtn.classList.add("liked");
-  
+
   likeBtn.onclick = (e) => {
     e.stopPropagation();
     if (likedIds.has(id)) {
@@ -560,10 +563,10 @@ function showModal(movie, predictedRating) {
   const clone = modalTemplate.content.cloneNode(true);
   activeModal = clone.querySelector(".modal-overlay");
 
-  const title  = activeModal.querySelector("#modal-title");
+  const title = activeModal.querySelector("#modal-title");
   const genres = activeModal.querySelector("#modal-genres");
   const rating = activeModal.querySelector("#modal-rating");
-  const close  = activeModal.querySelector("#modal-close");
+  const close = activeModal.querySelector("#modal-close");
 
   title.textContent = movie.title;
 
@@ -572,7 +575,7 @@ function showModal(movie, predictedRating) {
   movie.genres.split("|").forEach(g => {
     if (g && g !== "(no genres listed)") {
       const badge = document.createElement("span");
-      badge.className   = "genre-badge";
+      badge.className = "genre-badge";
       badge.textContent = g;
       genres.appendChild(badge);
     }
@@ -581,7 +584,7 @@ function showModal(movie, predictedRating) {
   // 3. Rating
   if (predictedRating !== null) {
     rating.textContent = `${starsForRating(predictedRating)}  ${predictedRating.toFixed(2)} / 5.0`;
-    rating.hidden      = false;
+    rating.hidden = false;
     rating.hidden = true;
   }
 
@@ -600,12 +603,12 @@ function showModal(movie, predictedRating) {
 
   // 5. Append and Show
   document.body.appendChild(activeModal);
-  
+
   // Force reflow for animation
-  activeModal.offsetHeight; 
+  activeModal.offsetHeight;
   activeModal.classList.add("active");
   activeModal.style.display = "flex";
-  
+
   close.focus();
 }
 
@@ -617,8 +620,8 @@ function closeModal() {
   activeModal = null;
 }
 
-document.addEventListener("keydown", e => { 
-  if (e.key === "Escape") closeModal(); 
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") closeModal();
 });
 
 /* --- HELPERS --- */
@@ -638,20 +641,20 @@ function starsForRating(rating) {
  * Keeps the grid visually varied without random values (stable across renders).
  */
 const GENRE_COLORS = {
-  "Action":     "#5c6e58",
-  "Adventure":  "#4a5e4b",
-  "Animation":  "#8b7d6b",
-  "Comedy":     "#c4b581",
-  "Crime":      "#3d4d3e",
-  "Drama":      "#6e6255",
-  "Fantasy":    "#a39373",
-  "Horror":     "#2c2f2a",
-  "Romance":    "#a07d83",
-  "Sci-Fi":     "#5d758f",
-  "Thriller":   "#3c4b57",
-  "Western":    "#875a46",
-  "Musical":    "#a69c6b",
-  "Documentary":"#475b6e",
+  "Action": "#5c6e58",
+  "Adventure": "#4a5e4b",
+  "Animation": "#8b7d6b",
+  "Comedy": "#c4b581",
+  "Crime": "#3d4d3e",
+  "Drama": "#6e6255",
+  "Fantasy": "#a39373",
+  "Horror": "#2c2f2a",
+  "Romance": "#a07d83",
+  "Sci-Fi": "#5d758f",
+  "Thriller": "#3c4b57",
+  "Western": "#875a46",
+  "Musical": "#a69c6b",
+  "Documentary": "#475b6e",
 };
 
 function genreColor(genres) {
@@ -675,7 +678,7 @@ function setStatus(msg, type = "info") {
 
 /** Toggle loading state (spinner + button disabled). */
 function setLoading(on) {
-  spinner.hidden      = !on;
+  spinner.hidden = !on;
   if (recommendBtn) recommendBtn.disabled = on;
   if (!on && spinner.hidden) {
     // no-op, spinner already hidden

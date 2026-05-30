@@ -12,7 +12,8 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
     rel="stylesheet" />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 fill=%22%235c6e58%22/></svg>">
+  <link rel="icon"
+    href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 fill=%22%235c6e58%22/></svg>">
   <link rel="stylesheet" href="style.css" />
 </head>
 
@@ -50,7 +51,7 @@
             <span class="tab-icon"></span> Pick a Movie
           </button>
         </div>
-        
+
 
 
         <!-- Mode 1: Movie title search (cold start / default) -->
@@ -68,19 +69,19 @@
             <!-- Autocomplete dropdown -->
             <ul class="autocomplete-list" id="autocomplete-list" hidden></ul>
           </div>
-          
+
           <!-- New: Mode Selector -->
           <div class="mode-selector">
             <span class="mode-label">Recommendation Mode:</span>
             <div class="mode-options">
-               <label class="mode-option">
-                 <input type="radio" name="reco-mode" value="story" checked />
-                 <span class="mode-box">Story</span>
-               </label>
-               <label class="mode-option">
-                 <input type="radio" name="reco-mode" value="director" />
-                 <span class="mode-box">Director</span>
-               </label>
+              <label class="mode-option">
+                <input type="radio" name="reco-mode" value="story" checked />
+                <span class="mode-box">Story</span>
+              </label>
+              <label class="mode-option">
+                <input type="radio" name="reco-mode" value="director" />
+                <span class="mode-box">Director</span>
+              </label>
             </div>
           </div>
         </div>
@@ -156,7 +157,13 @@
     <p>
       Built with <span class="heart">❤</span> using
       <strong>TensorFlow</strong> · <strong>Flask</strong> · <strong>Vanilla JS</strong> ·
-      MovieLens Dataset
+      TMDB Dataset
+    </p>
+    <p class="footer-contact">
+      Have concerns or feedback?
+      <a href="mailto:moviemind.support@gmail.com" class="footer-email" id="footer-contact-link">
+        moviemind.support@gmail.com
+      </a>
     </p>
   </footer>
 
